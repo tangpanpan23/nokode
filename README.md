@@ -2,6 +2,8 @@
 
 **A web server with no application logic. Just an LLM with three tools.**
 
+[中文版](README.zh.md) | [English](README.md)
+
 ## The Shower Thought
 
 One day we won't need code. LLMs will output video at 120fps, sample inputs in realtime, and just... be our computers. No apps, no code, just intent and execution.
