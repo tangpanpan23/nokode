@@ -28,17 +28,10 @@ Why? Because most software is just CRUD dressed up differently. If this works at
 
 ## The Experiment
 
-```javascript
-// The entire backend
-const result = await generateText({
-  model,
-  tools: {
-    database,      // Run SQL queries
-    webResponse,   // Return HTML/JSON
-    updateMemory   // Save user feedback
-  },
-  prompt: `Handle this HTTP request: ${method} ${path}`,
-});
+```go
+// The entire backend (simplified)
+result := callLLM(cfg, prompt, tools)
+// Tools: database, webResponse, updateMemory
 ```
 
 Three tools:
@@ -48,7 +41,7 @@ Three tools:
 
 The AI infers what to return from the path alone. Hit `/contacts` and you get an HTML page. Hit `/api/contacts` and you get JSON:
 
-```javascript
+```json
 // What the AI generates for /api/contacts
 {
   "contacts": [
@@ -111,32 +104,210 @@ I think we don't realize how much code, as a thing, is mostly transitional.
 
 ---
 
+## Installation
+
+### Prerequisites
+
+- Go 1.22 or later
+- SQLite3 (usually comes with the system)
+
+### Setup
+
+1. Clone the repository:
 ```bash
-npm install
+git clone <repository-url>
+cd nokode
 ```
 
-`.env`:
+2. Install dependencies:
+```bash
+go mod download
+```
+
+3. Create a `.env` file:
 ```env
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-3-haiku-20240307
+
+# Or use OpenAI:
+# LLM_PROVIDER=openai
+# OPENAI_API_KEY=sk-...
+# OPENAI_MODEL=gpt-4-turbo-preview
+
+PORT=3001
 ```
 
+4. Run the server:
 ```bash
-npm start
+go run main.go -f etc/nokode-api.yaml
+```
+
+Or build and run:
+```bash
+go build -o nokode
+./nokode -f etc/nokode-api.yaml
 ```
 
 Visit `http://localhost:3001`. First request: 30-60s.
 
-**What to try:**
+## Project Structure
 
-Check out `prompt.md` and customize it. Change what app it builds, add features, modify the behavior. That's the whole interface.
+```
+nokode/
+├── main.go                 # Application entry point
+├── go.mod                  # Go module definition
+├── etc/
+│   └── nokode-api.yaml    # go-zero configuration file
+├── internal/
+│   ├── config/            # Configuration management
+│   │   └── config.go
+│   ├── handler/           # HTTP handlers
+│   │   └── llm_handler.go # LLM request handler
+│   ├── tools/             # LLM tools
+│   │   ├── database.go    # SQLite database tool
+│   │   ├── web_response.go # HTTP response tool
+│   │   └── memory.go      # Memory persistence tool
+│   └── utils/             # Utility functions
+│       ├── logger.go      # Logging utility
+│       ├── prompt_loader.go # Load prompt.md
+│       └── memory_loader.go # Load memory.md
+├── prompt.md              # LLM system prompt
+├── prompt.zh.md           # LLM system prompt (Chinese)
+├── memory.md              # User feedback memory (auto-generated)
+└── database.db            # SQLite database (auto-generated)
+```
+
+## Features
+
+- **Zero Application Code**: All application logic is handled by the LLM
+- **Built with go-zero**: High-performance microservices framework
+- **Multiple LLM Providers**: Supports both Anthropic Claude and OpenAI GPT models
+- **Three Simple Tools**: Database, web response, and memory persistence
+- **Self-Evolving**: Users can provide feedback that shapes the application
+- **Fast Startup**: Go's compiled nature provides quick server startup
+- **Type Safe**: Go's static typing catches errors at compile time
+
+## Usage
+
+### Basic Usage
+
+The server handles all HTTP requests through the LLM. Simply make requests:
+
+```bash
+# Get the home page
+curl http://localhost:3001/
+
+# Create a contact (POST request)
+curl -X POST http://localhost:3001/contacts \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice","email":"alice@example.com"}'
+
+# Get API response
+curl http://localhost:3001/api/contacts
+```
+
+### Customization
+
+Edit `prompt.md` to change what application the LLM builds. The prompt defines the behavior, features, and style of the generated application.
+
+**What to try:**
 
 Out of the box it builds a contact manager. But try:
 - `/game` - Maybe you get a game?
 - `/dashboard` - Could be anything
 - `/api/stats` - Might invent an API
 - Type feedback: "make this purple" or "add a search box"
+
+## Configuration
+
+### Configuration File
+
+The server uses go-zero's configuration system. Edit `etc/nokode-api.yaml`:
+
+```yaml
+Name: nokode-api
+Host: 0.0.0.0
+Port: 3001
+Timeout: 300000
+MaxConns: 1000
+MaxBytes: 1048576
+```
+
+### Environment Variables
+
+- `PORT` - Server port (default: 3001)
+- `LLM_PROVIDER` - Either "anthropic" or "openai" (default: anthropic)
+- `ANTHROPIC_API_KEY` - Your Anthropic API key
+- `ANTHROPIC_MODEL` - Anthropic model name (default: claude-3-haiku-20240307)
+- `OPENAI_API_KEY` - Your OpenAI API key
+- `OPENAI_MODEL` - OpenAI model name (default: gpt-4-turbo-preview)
+- `DEBUG` - Set to "true" for debug logging
+
+## Performance
+
+The Go implementation with go-zero provides:
+- **Faster startup**: Compiled binary starts instantly
+- **Lower memory usage**: Go's efficient runtime
+- **Better concurrency**: Native goroutine support for handling multiple requests
+- **Production ready**: go-zero provides built-in monitoring, tracing, and service discovery
+
+However, the LLM processing time remains the same (30-60 seconds per request) as it depends on the API provider, not the server implementation.
+
+## Development
+
+### Building
+
+```bash
+# Build for current platform
+go build -o nokode
+
+# Build for Linux
+GOOS=linux GOARCH=amd64 go build -o nokode-linux
+
+# Build for macOS
+GOOS=darwin GOARCH=amd64 go build -o nokode-macos
+
+# Build for Windows
+GOOS=windows GOARCH=amd64 go build -o nokode.exe
+```
+
+### Running
+
+```bash
+# Development mode
+go run main.go -f etc/nokode-api.yaml
+
+# Production mode
+./nokode -f etc/nokode-api.yaml
+```
+
+## About go-zero
+
+This project uses [go-zero](https://go-zero.dev), a web and rpc framework with lots of built-in engineering practices. It's designed to simplify the development of microservices and provides:
+
+- Built-in service discovery, load balancing, tracing, monitoring, and more
+- High performance with minimal overhead
+- Simple API definition and code generation
+- Production-ready features out of the box
+
+## Troubleshooting
+
+### Database Issues
+
+If you encounter database errors, delete `database.db` and restart the server. The LLM will recreate the schema.
+
+### API Key Issues
+
+Make sure your `.env` file contains valid API keys for your chosen provider.
+
+### Port Already in Use
+
+Change the `PORT` environment variable or edit `etc/nokode-api.yaml` to use a different port.
+
+### Configuration File Not Found
+
+Make sure the `-f` flag points to the correct configuration file path, or create `etc/nokode-api.yaml` if it doesn't exist.
 
 ⚠️ **Cost warning**: Each request costs $0.001-0.05 depending on model. Budget accordingly.
 

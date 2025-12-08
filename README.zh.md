@@ -28,17 +28,10 @@
 
 ## 实验
 
-```javascript
-// 整个后端
-const result = await generateText({
-  model,
-  tools: {
-    database,      // 执行 SQL 查询
-    webResponse,   // 返回 HTML/JSON
-    updateMemory   // 保存用户反馈
-  },
-  prompt: `处理这个 HTTP 请求: ${method} ${path}`,
-});
+```go
+// 整个后端（简化版）
+result := callLLM(cfg, prompt, tools)
+// 工具: database, webResponse, updateMemory
 ```
 
 三个工具：
@@ -48,7 +41,7 @@ const result = await generateText({
 
 AI 仅从路径推断要返回什么。访问 `/contacts` 你会得到一个 HTML 页面。访问 `/api/contacts` 你会得到 JSON：
 
-```javascript
+```json
 // AI 为 /api/contacts 生成的内容
 {
   "contacts": [
@@ -111,26 +104,114 @@ AI 仅从路径推断要返回什么。访问 `/contacts` 你会得到一个 HTM
 
 ---
 
+## 安装
+
+### 前置要求
+
+- Go 1.22 或更高版本
+- SQLite3（通常系统自带）
+
+### 设置
+
+1. 克隆仓库：
 ```bash
-npm install
+git clone <repository-url>
+cd nokode
 ```
 
-`.env`:
+2. 安装依赖：
+```bash
+go mod download
+```
+
+3. 创建 `.env` 文件：
 ```env
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-3-haiku-20240307
+
+# 或使用 OpenAI:
+# LLM_PROVIDER=openai
+# OPENAI_API_KEY=sk-...
+# OPENAI_MODEL=gpt-4-turbo-preview
+
+PORT=3001
 ```
 
+4. 运行服务器：
 ```bash
-npm start
+go run main.go -f etc/nokode-api.yaml
+```
+
+或编译后运行：
+```bash
+go build -o nokode
+./nokode -f etc/nokode-api.yaml
 ```
 
 访问 `http://localhost:3001`。首次请求：30-60 秒。
 
-**可以尝试的：**
+## 项目结构
 
-查看 `prompt.md` 并自定义它。更改它构建的应用，添加功能，修改行为。这就是整个界面。
+```
+nokode/
+├── main.go                 # 应用程序入口点
+├── go.mod                  # Go 模块定义
+├── etc/
+│   └── nokode-api.yaml    # go-zero 配置文件
+├── internal/
+│   ├── config/            # 配置管理
+│   │   └── config.go
+│   ├── handler/           # HTTP 处理器
+│   │   └── llm_handler.go # LLM 请求处理器
+│   ├── tools/             # LLM 工具
+│   │   ├── database.go    # SQLite 数据库工具
+│   │   ├── web_response.go # HTTP 响应工具
+│   │   └── memory.go      # 内存持久化工具
+│   └── utils/             # 工具函数
+│       ├── logger.go      # 日志工具
+│       ├── prompt_loader.go # 加载 prompt.md
+│       └── memory_loader.go # 加载 memory.md
+├── prompt.md              # LLM 系统提示
+├── prompt.zh.md           # LLM 系统提示（中文）
+├── memory.md              # 用户反馈内存（自动生成）
+└── database.db            # SQLite 数据库（自动生成）
+```
+
+## 特性
+
+- **零应用代码**：所有应用逻辑由 LLM 处理
+- **基于 go-zero**：高性能微服务框架
+- **多 LLM 提供商**：支持 Anthropic Claude 和 OpenAI GPT 模型
+- **三个简单工具**：数据库、Web 响应和内存持久化
+- **自我演化**：用户可以提供反馈来塑造应用程序
+- **快速启动**：Go 的编译特性提供快速服务器启动
+- **类型安全**：Go 的静态类型在编译时捕获错误
+
+## 使用方法
+
+### 基本使用
+
+服务器通过 LLM 处理所有 HTTP 请求。只需发送请求：
+
+```bash
+# 获取主页
+curl http://localhost:3001/
+
+# 创建联系人（POST 请求）
+curl -X POST http://localhost:3001/contacts \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice","email":"alice@example.com"}'
+
+# 获取 API 响应
+curl http://localhost:3001/api/contacts
+```
+
+### 自定义
+
+编辑 `prompt.md` 来更改 LLM 构建的应用程序。提示定义了生成应用程序的行为、功能和样式。
+
+**可以尝试的：**
 
 开箱即用，它构建一个联系人管理器。但可以尝试：
 - `/game` - 也许你会得到一个游戏？
@@ -138,7 +219,96 @@ npm start
 - `/api/stats` - 可能会发明一个 API
 - 输入反馈："把这个变成紫色"或"添加一个搜索框"
 
+## 配置
+
+### 配置文件
+
+服务器使用 go-zero 的配置系统。编辑 `etc/nokode-api.yaml`：
+
+```yaml
+Name: nokode-api
+Host: 0.0.0.0
+Port: 3001
+Timeout: 300000
+MaxConns: 1000
+MaxBytes: 1048576
+```
+
+### 环境变量
+
+- `PORT` - 服务器端口（默认：3001）
+- `LLM_PROVIDER` - "anthropic" 或 "openai"（默认：anthropic）
+- `ANTHROPIC_API_KEY` - 你的 Anthropic API 密钥
+- `ANTHROPIC_MODEL` - Anthropic 模型名称（默认：claude-3-haiku-20240307）
+- `OPENAI_API_KEY` - 你的 OpenAI API 密钥
+- `OPENAI_MODEL` - OpenAI 模型名称（默认：gpt-4-turbo-preview）
+- `DEBUG` - 设置为 "true" 以启用调试日志
+
+## 性能
+
+Go 实现配合 go-zero 提供：
+- **更快的启动**：编译的二进制文件立即启动
+- **更低的内存使用**：Go 的高效运行时
+- **更好的并发性**：原生 goroutine 支持处理多个请求
+- **生产就绪**：go-zero 提供内置监控、追踪和服务发现
+
+但是，LLM 处理时间保持不变（每个请求 30-60 秒），因为它取决于 API 提供商，而不是服务器实现。
+
+## 开发
+
+### 构建
+
+```bash
+# 为当前平台构建
+go build -o nokode
+
+# 为 Linux 构建
+GOOS=linux GOARCH=amd64 go build -o nokode-linux
+
+# 为 macOS 构建
+GOOS=darwin GOARCH=amd64 go build -o nokode-macos
+
+# 为 Windows 构建
+GOOS=windows GOARCH=amd64 go build -o nokode.exe
+```
+
+### 运行
+
+```bash
+# 开发模式
+go run main.go -f etc/nokode-api.yaml
+
+# 生产模式
+./nokode -f etc/nokode-api.yaml
+```
+
+## 关于 go-zero
+
+本项目使用 [go-zero](https://go-zero.dev)，一个内置大量工程实践的 web 和 rpc 框架。它旨在简化微服务的开发，并提供：
+
+- 内置服务发现、负载均衡、追踪、监控等
+- 高性能，开销最小
+- 简单的 API 定义和代码生成
+- 开箱即用的生产就绪功能
+
+## 故障排除
+
+### 数据库问题
+
+如果遇到数据库错误，删除 `database.db` 并重启服务器。LLM 将重新创建模式。
+
+### API 密钥问题
+
+确保你的 `.env` 文件包含所选提供商的有效 API 密钥。
+
+### 端口已被使用
+
+更改 `PORT` 环境变量或编辑 `etc/nokode-api.yaml` 以使用不同的端口。
+
+### 配置文件未找到
+
+确保 `-f` 标志指向正确的配置文件路径，或者如果不存在则创建 `etc/nokode-api.yaml`。
+
 ⚠️ **成本警告**：每个请求根据模型花费 $0.001-0.05。请相应预算。
 
 MIT License
-
