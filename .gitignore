@@ -10,6 +10,11 @@ go.work
 nokode
 nokode-*
 
+# Node.js (legacy, should not exist)
+node_modules/
+package-lock.json
+package.json
+
 # Environment
 .env
 .env.local
