@@ -1,15 +1,37 @@
-node_modules/
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+nokode
+nokode-*
+
+# Environment
 .env
 .env.local
-.DS_Store
-*.log
-dist/
-build/
 
-# AI-generated files (will be recreated by the AI)
+# Database
 *.db
+*.db-shm
+*.db-wal
+
+# Memory
 memory.md
 
-# Local development
-.claude/
-.playwright-mcp/
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
