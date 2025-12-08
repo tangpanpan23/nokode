@@ -18,6 +18,10 @@ type Config struct {
 		Password string `json:",optional"`
 		Database string `json:",optional"`
 	}
+	Qwen struct {
+		Model  string `json:",optional"`
+		APIKey string `json:",optional"`
+	}
 	Anthropic struct {
 		Model  string `json:",optional"`
 		APIKey string `json:",optional"`
@@ -38,7 +42,7 @@ func Load(configFile string) (*Config, error) {
 	
 	// Override with environment variables
 	if c.Provider == "" {
-		c.Provider = getEnv("LLM_PROVIDER", "anthropic")
+		c.Provider = getEnv("LLM_PROVIDER", "qwen")
 	}
 	if c.RestConf.Port == 0 {
 		portStr := getEnv("PORT", "3001")
@@ -75,6 +79,11 @@ func Load(configFile string) (*Config, error) {
 	}
 	if c.Database.Database == "" {
 		c.Database.Database = getEnv("DB_NAME", "nokode")
+	}
+
+	c.Qwen.Model = getEnv("QWEN_MODEL", "qwen-turbo")
+	if c.Qwen.APIKey == "" {
+		c.Qwen.APIKey = getEnv("QWEN_API_KEY", getEnv("DASHSCOPE_API_KEY", ""))
 	}
 
 	c.Anthropic.Model = getEnv("ANTHROPIC_MODEL", "claude-3-haiku-20240307")

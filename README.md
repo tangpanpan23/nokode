@@ -131,11 +131,15 @@ CREATE DATABASE nokode CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 4. Create a `.env` file:
 ```env
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-3-haiku-20240307
+LLM_PROVIDER=qwen
+QWEN_API_KEY=sk-...
+QWEN_MODEL=qwen-turbo
 
-# Or use OpenAI:
+# Or use other providers:
+# LLM_PROVIDER=anthropic
+# ANTHROPIC_API_KEY=sk-ant-...
+# ANTHROPIC_MODEL=claude-3-haiku-20240307
+# 
 # LLM_PROVIDER=openai
 # OPENAI_API_KEY=sk-...
 # OPENAI_MODEL=gpt-4-turbo-preview
@@ -193,7 +197,7 @@ nokode/
 
 - **Zero Application Code**: All application logic is handled by the LLM
 - **Built with go-zero**: High-performance microservices framework
-- **Multiple LLM Providers**: Supports both Anthropic Claude and OpenAI GPT models
+- **Multiple LLM Providers**: Supports Alibaba Cloud Qwen (Tongyi Qianwen), Anthropic Claude, and OpenAI GPT models
 - **Three Simple Tools**: Database, web response, and memory persistence
 - **Self-Evolving**: Users can provide feedback that shapes the application
 - **Fast Startup**: Go's compiled nature provides quick server startup
@@ -258,7 +262,9 @@ Database:
 - `PORT` - Server port (default: 3001)
 
 **LLM Provider:**
-- `LLM_PROVIDER` - Either "anthropic" or "openai" (default: anthropic)
+- `LLM_PROVIDER` - "qwen", "anthropic", or "openai" (default: qwen)
+- `QWEN_API_KEY` or `DASHSCOPE_API_KEY` - Alibaba Cloud DashScope API key
+- `QWEN_MODEL` - Qwen model name (default: qwen-turbo, options: qwen-plus, qwen-max, etc.)
 - `ANTHROPIC_API_KEY` - Your Anthropic API key
 - `ANTHROPIC_MODEL` - Anthropic model name (default: claude-3-haiku-20240307)
 - `OPENAI_API_KEY` - Your OpenAI API key

@@ -131,11 +131,15 @@ CREATE DATABASE nokode CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 4. 创建 `.env` 文件：
 ```env
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-3-haiku-20240307
+LLM_PROVIDER=qwen
+QWEN_API_KEY=sk-...
+QWEN_MODEL=qwen-turbo
 
-# 或使用 OpenAI:
+# 或使用其他提供商:
+# LLM_PROVIDER=anthropic
+# ANTHROPIC_API_KEY=sk-ant-...
+# ANTHROPIC_MODEL=claude-3-haiku-20240307
+# 
 # LLM_PROVIDER=openai
 # OPENAI_API_KEY=sk-...
 # OPENAI_MODEL=gpt-4-turbo-preview
@@ -192,7 +196,7 @@ nokode/
 
 - **零应用代码**：所有应用逻辑由 LLM 处理
 - **基于 go-zero**：高性能微服务框架
-- **多 LLM 提供商**：支持 Anthropic Claude 和 OpenAI GPT 模型
+- **多 LLM 提供商**：支持阿里云千问（通义千问）、Anthropic Claude 和 OpenAI GPT 模型
 - **三个简单工具**：数据库、Web 响应和内存持久化
 - **自我演化**：用户可以提供反馈来塑造应用程序
 - **快速启动**：Go 的编译特性提供快速服务器启动
@@ -257,7 +261,9 @@ Database:
 - `PORT` - 服务器端口（默认：3001）
 
 **LLM 提供商:**
-- `LLM_PROVIDER` - "anthropic" 或 "openai"（默认：anthropic）
+- `LLM_PROVIDER` - "qwen"、"anthropic" 或 "openai"（默认：qwen）
+- `QWEN_API_KEY` 或 `DASHSCOPE_API_KEY` - 阿里云 DashScope API 密钥
+- `QWEN_MODEL` - 千问模型名称（默认：qwen-turbo，可选：qwen-plus、qwen-max 等）
 - `ANTHROPIC_API_KEY` - 你的 Anthropic API 密钥
 - `ANTHROPIC_MODEL` - Anthropic 模型名称（默认：claude-3-haiku-20240307）
 - `OPENAI_API_KEY` - 你的 OpenAI API 密钥

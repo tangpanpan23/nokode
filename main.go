@@ -40,13 +40,18 @@ func main() {
 		}
 	}
 	if c.Provider == "" {
-		c.Provider = getEnv("LLM_PROVIDER", "anthropic")
+		c.Provider = getEnv("LLM_PROVIDER", "qwen")
 	}
 	if c.RestConf.Host == "" {
 		c.RestConf.Host = "0.0.0.0"
 	}
 	if c.RestConf.Timeout == 0 {
 		c.RestConf.Timeout = 300000 // 5 minutes in milliseconds
+	}
+
+	c.Qwen.Model = getEnv("QWEN_MODEL", "qwen-turbo")
+	if c.Qwen.APIKey == "" {
+		c.Qwen.APIKey = getEnv("QWEN_API_KEY", getEnv("DASHSCOPE_API_KEY", ""))
 	}
 
 	c.Anthropic.Model = getEnv("ANTHROPIC_MODEL", "claude-3-haiku-20240307")
@@ -135,7 +140,9 @@ func main() {
 	log.Printf("🧠 Using %s provider", c.Provider)
 
 	var model string
-	if c.Provider == "anthropic" {
+	if c.Provider == "qwen" {
+		model = c.Qwen.Model
+	} else if c.Provider == "anthropic" {
 		model = c.Anthropic.Model
 	} else {
 		model = c.OpenAI.Model
