@@ -9,6 +9,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/nokode/nokode/internal/config"
 	"github.com/nokode/nokode/internal/handler"
+	"github.com/nokode/nokode/internal/tools"
 	"github.com/zeromicro/go-zero/core/conf"
 	"github.com/zeromicro/go-zero/rest"
 )
@@ -56,6 +57,11 @@ func main() {
 	c.OpenAI.Model = getEnv("OPENAI_MODEL", "gpt-4-turbo-preview")
 	if c.OpenAI.APIKey == "" {
 		c.OpenAI.APIKey = getEnv("OPENAI_API_KEY", "")
+	}
+
+	// Initialize database
+	if err := tools.InitDatabase(&c); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
 	// Create server

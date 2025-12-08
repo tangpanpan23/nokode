@@ -4,68 +4,99 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/nokode/nokode/internal/config"
 	"github.com/nokode/nokode/internal/utils"
 )
 
 var db *sql.DB
 var cachedSchema string
 
-func init() {
-	// Initialize database
-	dbPath := "database.db"
-	
-	// Try to find it in project root
-	for i := 0; i < 5; i++ {
-		if _, err := os.Stat(dbPath); err == nil {
-			break
-		}
-		dbPath = filepath.Join("..", dbPath)
-	}
-	
+func InitDatabase(cfg *config.Config) error {
+	// Build MySQL DSN
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
+		cfg.Database.User,
+		cfg.Database.Password,
+		cfg.Database.Host,
+		cfg.Database.Port,
+		cfg.Database.Database,
+	)
+
 	var err error
-	db, err = sql.Open("sqlite3", dbPath+"?_foreign_keys=1")
+	db, err = sql.Open("mysql", dsn)
 	if err != nil {
 		utils.Log.Error("database", "Failed to open database", err)
-		return
+		return err
 	}
 
-	// Enable foreign keys
-	db.Exec("PRAGMA foreign_keys = ON")
+	// Test connection
+	if err = db.Ping(); err != nil {
+		utils.Log.Error("database", "Failed to ping database", err)
+		return err
+	}
+
+	// Set connection pool settings
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
 
 	// Load schema on startup
 	loadDatabaseSchema()
+
+	utils.Log.Success("database", "MySQL database connected successfully", map[string]interface{}{
+		"host":     cfg.Database.Host,
+		"port":     cfg.Database.Port,
+		"database": cfg.Database.Database,
+	})
+
+	return nil
 }
 
 func loadDatabaseSchema() {
-	query := "SELECT sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL"
-	rows, err := db.Query(query)
+	// First, get list of tables
+	tableRows, err := db.Query("SHOW TABLES")
 	if err != nil {
-		utils.Log.Error("database", "Failed to load database schema", err)
-		cachedSchema = ""
+		utils.Log.Error("database", "Failed to get table list", err)
+		cachedSchema = "\n## DATABASE SCHEMA\n\nNo tables found. The AI can create tables as needed.\n\n"
 		return
 	}
-	defer rows.Close()
+	defer tableRows.Close()
 
+	var tables []string
+	for tableRows.Next() {
+		var tableName string
+		if err := tableRows.Scan(&tableName); err != nil {
+			continue
+		}
+		tables = append(tables, tableName)
+	}
+
+	if len(tables) == 0 {
+		cachedSchema = "\n## DATABASE SCHEMA\n\nNo tables found. The AI can create tables as needed.\n\n"
+		utils.Log.Success("startup", "Database schema cached (no tables)", nil)
+		return
+	}
+
+	// Get CREATE TABLE statement for each table
 	var schema strings.Builder
 	schema.WriteString("\n## DATABASE SCHEMA (Use these exact column names!)\n\n")
 
-	for rows.Next() {
-		var sql string
-		if err := rows.Scan(&sql); err != nil {
+	for _, tableName := range tables {
+		var createStmt string
+		var unused string
+		err := db.QueryRow("SHOW CREATE TABLE "+tableName).Scan(&unused, &createStmt)
+		if err != nil {
+			utils.Log.Debug("database", fmt.Sprintf("Failed to get CREATE TABLE for %s", tableName), err)
 			continue
 		}
-		schema.WriteString(sql)
+		schema.WriteString(createStmt)
 		schema.WriteString(";\n\n")
 	}
 
 	cachedSchema = schema.String()
-	utils.Log.Success("startup", "Database schema cached for performance", nil)
+	utils.Log.Success("startup", fmt.Sprintf("Database schema cached for %d table(s)", len(tables)), nil)
 }
 
 func GetCachedSchema() string {
@@ -107,8 +138,10 @@ func ExecuteDatabaseQuery(query string, params []interface{}, mode string) Datab
 	// Trim and check query type
 	queryUpper := strings.TrimSpace(strings.ToUpper(query))
 	isSelect := strings.HasPrefix(queryUpper, "SELECT") ||
-		strings.Contains(queryUpper, "RETURNING") ||
-		strings.HasPrefix(queryUpper, "PRAGMA")
+		strings.HasPrefix(queryUpper, "SHOW") ||
+		strings.HasPrefix(queryUpper, "DESCRIBE") ||
+		strings.HasPrefix(queryUpper, "DESC") ||
+		strings.HasPrefix(queryUpper, "EXPLAIN")
 
 	if mode == "exec" && len(params) == 0 {
 		// Exec mode for DDL or multiple statements without parameters

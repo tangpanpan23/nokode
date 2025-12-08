@@ -109,7 +109,7 @@ I think we don't realize how much code, as a thing, is mostly transitional.
 ### Prerequisites
 
 - Go 1.22 or later
-- SQLite3 (usually comes with the system)
+- MySQL 5.7+ or MariaDB 10.3+
 
 ### Setup
 
@@ -124,7 +124,12 @@ cd nokode
 go mod download
 ```
 
-3. Create a `.env` file:
+3. Create a MySQL database:
+```sql
+CREATE DATABASE nokode CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+4. Create a `.env` file:
 ```env
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
@@ -135,10 +140,17 @@ ANTHROPIC_MODEL=claude-3-haiku-20240307
 # OPENAI_API_KEY=sk-...
 # OPENAI_MODEL=gpt-4-turbo-preview
 
+# Database configuration
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_password
+DB_NAME=nokode
+
 PORT=3001
 ```
 
-4. Run the server:
+5. Run the server:
 ```bash
 go run main.go -f etc/nokode-api.yaml
 ```
@@ -174,8 +186,7 @@ nokode/
 │       └── memory_loader.go # Load memory.md
 ├── prompt.md              # LLM system prompt
 ├── prompt.zh.md           # LLM system prompt (Chinese)
-├── memory.md              # User feedback memory (auto-generated)
-└── database.db            # SQLite database (auto-generated)
+└── memory.md              # User feedback memory (auto-generated)
 ```
 
 ## Features
@@ -232,16 +243,35 @@ Port: 3001
 Timeout: 300000
 MaxConns: 1000
 MaxBytes: 1048576
+
+Database:
+  Host: localhost
+  Port: 3306
+  User: root
+  Password: ""
+  Database: nokode
 ```
 
 ### Environment Variables
 
+**Server:**
 - `PORT` - Server port (default: 3001)
+
+**LLM Provider:**
 - `LLM_PROVIDER` - Either "anthropic" or "openai" (default: anthropic)
 - `ANTHROPIC_API_KEY` - Your Anthropic API key
 - `ANTHROPIC_MODEL` - Anthropic model name (default: claude-3-haiku-20240307)
 - `OPENAI_API_KEY` - Your OpenAI API key
 - `OPENAI_MODEL` - OpenAI model name (default: gpt-4-turbo-preview)
+
+**Database:**
+- `DB_HOST` - MySQL host (default: localhost)
+- `DB_PORT` - MySQL port (default: 3306)
+- `DB_USER` - MySQL user (default: root)
+- `DB_PASSWORD` - MySQL password (default: empty)
+- `DB_NAME` - MySQL database name (default: nokode)
+
+**Debug:**
 - `DEBUG` - Set to "true" for debug logging
 
 ## Performance
@@ -295,7 +325,18 @@ This project uses [go-zero](https://go-zero.dev), a web and rpc framework with l
 
 ### Database Issues
 
-If you encounter database errors, delete `database.db` and restart the server. The LLM will recreate the schema.
+**Connection Errors:**
+- Make sure MySQL is running: `mysql -u root -p`
+- Verify database exists: `SHOW DATABASES;`
+- Check credentials in `.env` or `etc/nokode-api.yaml`
+
+**Schema Issues:**
+- The AI will create tables automatically on first use
+- If you need to reset, drop and recreate the database:
+  ```sql
+  DROP DATABASE nokode;
+  CREATE DATABASE nokode CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  ```
 
 ### API Key Issues
 

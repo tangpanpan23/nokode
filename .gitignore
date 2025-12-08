@@ -20,9 +20,7 @@ package.json
 .env.local
 
 # Database
-*.db
-*.db-shm
-*.db-wal
+# MySQL databases are managed separately, no files to ignore
 
 # Memory
 memory.md

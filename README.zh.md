@@ -109,7 +109,7 @@ AI 仅从路径推断要返回什么。访问 `/contacts` 你会得到一个 HTM
 ### 前置要求
 
 - Go 1.22 或更高版本
-- SQLite3（通常系统自带）
+- MySQL 5.7+ 或 MariaDB 10.3+
 
 ### 设置
 
@@ -124,7 +124,12 @@ cd nokode
 go mod download
 ```
 
-3. 创建 `.env` 文件：
+3. 创建 MySQL 数据库：
+```sql
+CREATE DATABASE nokode CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+4. 创建 `.env` 文件：
 ```env
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
@@ -135,10 +140,17 @@ ANTHROPIC_MODEL=claude-3-haiku-20240307
 # OPENAI_API_KEY=sk-...
 # OPENAI_MODEL=gpt-4-turbo-preview
 
+# 数据库配置
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_password
+DB_NAME=nokode
+
 PORT=3001
 ```
 
-4. 运行服务器：
+5. 运行服务器：
 ```bash
 go run main.go -f etc/nokode-api.yaml
 ```
@@ -173,9 +185,7 @@ nokode/
 │       ├── prompt_loader.go # 加载 prompt.md
 │       └── memory_loader.go # 加载 memory.md
 ├── prompt.md              # LLM 系统提示
-├── prompt.zh.md           # LLM 系统提示（中文）
-├── memory.md              # 用户反馈内存（自动生成）
-└── database.db            # SQLite 数据库（自动生成）
+└── prompt.zh.md           # LLM 系统提示（中文）
 ```
 
 ## 特性
@@ -232,16 +242,35 @@ Port: 3001
 Timeout: 300000
 MaxConns: 1000
 MaxBytes: 1048576
+
+Database:
+  Host: localhost
+  Port: 3306
+  User: root
+  Password: ""
+  Database: nokode
 ```
 
 ### 环境变量
 
+**服务器:**
 - `PORT` - 服务器端口（默认：3001）
+
+**LLM 提供商:**
 - `LLM_PROVIDER` - "anthropic" 或 "openai"（默认：anthropic）
 - `ANTHROPIC_API_KEY` - 你的 Anthropic API 密钥
 - `ANTHROPIC_MODEL` - Anthropic 模型名称（默认：claude-3-haiku-20240307）
 - `OPENAI_API_KEY` - 你的 OpenAI API 密钥
 - `OPENAI_MODEL` - OpenAI 模型名称（默认：gpt-4-turbo-preview）
+
+**数据库:**
+- `DB_HOST` - MySQL 主机（默认：localhost）
+- `DB_PORT` - MySQL 端口（默认：3306）
+- `DB_USER` - MySQL 用户（默认：root）
+- `DB_PASSWORD` - MySQL 密码（默认：空）
+- `DB_NAME` - MySQL 数据库名称（默认：nokode）
+
+**调试:**
 - `DEBUG` - 设置为 "true" 以启用调试日志
 
 ## 性能
@@ -295,7 +324,18 @@ go run main.go -f etc/nokode-api.yaml
 
 ### 数据库问题
 
-如果遇到数据库错误，删除 `database.db` 并重启服务器。LLM 将重新创建模式。
+**连接错误:**
+- 确保 MySQL 正在运行：`mysql -u root -p`
+- 验证数据库是否存在：`SHOW DATABASES;`
+- 检查 `.env` 或 `etc/nokode-api.yaml` 中的凭据
+
+**模式问题:**
+- AI 会在首次使用时自动创建表
+- 如果需要重置，删除并重新创建数据库：
+  ```sql
+  DROP DATABASE nokode;
+  CREATE DATABASE nokode CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  ```
 
 ### API 密钥问题
 

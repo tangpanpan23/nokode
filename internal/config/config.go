@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/zeromicro/go-zero/core/conf"
@@ -9,8 +10,14 @@ import (
 
 type Config struct {
 	RestConf rest.RestConf `yaml:",inline"`
-	Port     string        `json:",optional"`
 	Provider string        `json:",optional"`
+	Database struct {
+		Host     string `json:",optional"`
+		Port     int    `json:",optional"`
+		User     string `json:",optional"`
+		Password string `json:",optional"`
+		Database string `json:",optional"`
+	}
 	Anthropic struct {
 		Model  string `json:",optional"`
 		APIKey string `json:",optional"`
@@ -30,17 +37,44 @@ func Load(configFile string) (*Config, error) {
 	}
 	
 	// Override with environment variables
-	if c.Port == "" {
-		c.Port = getEnv("PORT", "3001")
-	}
 	if c.Provider == "" {
 		c.Provider = getEnv("LLM_PROVIDER", "anthropic")
 	}
 	if c.RestConf.Port == 0 {
-		c.RestConf.Port = 3001
+		portStr := getEnv("PORT", "3001")
+		var port int
+		if _, err := fmt.Sscanf(portStr, "%d", &port); err == nil {
+			c.RestConf.Port = port
+		} else {
+			c.RestConf.Port = 3001
+		}
 	}
 	if c.RestConf.Host == "" {
 		c.RestConf.Host = "0.0.0.0"
+	}
+	if c.RestConf.Timeout == 0 {
+		c.RestConf.Timeout = 300000
+	}
+
+	// Database configuration
+	if c.Database.Host == "" {
+		c.Database.Host = getEnv("DB_HOST", "localhost")
+	}
+	if c.Database.Port == 0 {
+		portStr := getEnv("DB_PORT", "3306")
+		fmt.Sscanf(portStr, "%d", &c.Database.Port)
+		if c.Database.Port == 0 {
+			c.Database.Port = 3306
+		}
+	}
+	if c.Database.User == "" {
+		c.Database.User = getEnv("DB_USER", "root")
+	}
+	if c.Database.Password == "" {
+		c.Database.Password = getEnv("DB_PASSWORD", "")
+	}
+	if c.Database.Database == "" {
+		c.Database.Database = getEnv("DB_NAME", "nokode")
 	}
 
 	c.Anthropic.Model = getEnv("ANTHROPIC_MODEL", "claude-3-haiku-20240307")
