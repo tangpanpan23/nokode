@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -153,5 +154,167 @@ func printData(data interface{}) {
 	if data != nil {
 		fmt.Printf("%s%s%s %s%v%s\n", colorGray, strings.Repeat(" ", 24), colorReset, colorDim, data, colorReset)
 	}
+}
+
+// LLMRequest logs the complete LLM API request
+func (l *Logger) LLMRequest(provider, url string, headers map[string]string, requestBody interface{}) {
+	timestamp := formatTimestamp()
+	areaTag := formatArea("llm-request")
+	
+	fmt.Printf("%s%s%s %s%s%s %s🤖 [%s] Request to %s%s\n", 
+		colorGray, timestamp, colorReset, 
+		colorMagenta, areaTag, colorReset,
+		colorCyan, strings.ToUpper(provider), url, colorReset)
+	
+	// Log headers (mask API keys for console)
+	logHeaders := make(map[string]string)
+	for k, v := range headers {
+		if strings.Contains(strings.ToLower(k), "authorization") || strings.Contains(strings.ToLower(k), "api-key") {
+			if len(v) > 10 {
+				logHeaders[k] = v[:7] + "..." + v[len(v)-4:]
+			} else {
+				logHeaders[k] = "***"
+			}
+		} else {
+			logHeaders[k] = v
+		}
+	}
+	
+	// Format and print request body as JSON
+	if requestBody != nil {
+		jsonData, err := json.MarshalIndent(requestBody, "", "  ")
+		if err == nil {
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, "Headers:", colorReset)
+			headersJSON, _ := json.MarshalIndent(logHeaders, strings.Repeat(" ", 26), "  ")
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, string(headersJSON), colorReset)
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, "Request Body:", colorReset)
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, string(jsonData), colorReset)
+		}
+	}
+	
+	// Save to file (with full headers including API keys)
+	l.saveLLMRequestToFile(provider, url, headers, requestBody)
+}
+
+// LLMResponse logs the complete LLM API response
+func (l *Logger) LLMResponse(provider string, statusCode int, responseBody interface{}, rawBody []byte) {
+	timestamp := formatTimestamp()
+	areaTag := formatArea("llm-response")
+	
+	statusColor := colorGreen
+	if statusCode != 200 {
+		statusColor = colorRed
+	}
+	
+	fmt.Printf("%s%s%s %s%s%s %s📥 [%s] Response Status: %s%d%s\n", 
+		colorGray, timestamp, colorReset, 
+		colorMagenta, areaTag, colorReset,
+		statusColor, strings.ToUpper(provider), statusColor, statusCode, colorReset)
+	
+	// Log response body
+	if responseBody != nil {
+		jsonData, err := json.MarshalIndent(responseBody, "", "  ")
+		if err == nil {
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, "Response Body:", colorReset)
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, string(jsonData), colorReset)
+		}
+	} else if len(rawBody) > 0 {
+		// If responseBody is nil but we have raw body, try to format it
+		var jsonObj interface{}
+		if err := json.Unmarshal(rawBody, &jsonObj); err == nil {
+			jsonData, _ := json.MarshalIndent(jsonObj, "", "  ")
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, "Response Body:", colorReset)
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, string(jsonData), colorReset)
+		} else {
+			// If not JSON, print as string (truncated if too long)
+			bodyStr := string(rawBody)
+			if len(bodyStr) > 1000 {
+				bodyStr = bodyStr[:1000] + "... (truncated)"
+			}
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, "Response Body (raw):", colorReset)
+			fmt.Printf("%s%s%s %s%s%s\n", 
+				colorGray, strings.Repeat(" ", 24), colorReset, 
+				colorDim, bodyStr, colorReset)
+		}
+	}
+	
+	// Save to file
+	l.saveLLMResponseToFile(provider, statusCode, responseBody, rawBody)
+}
+
+// saveLLMRequestToFile saves the complete LLM request to a JSON file
+func (l *Logger) saveLLMRequestToFile(provider, url string, headers map[string]string, requestBody interface{}) {
+	logDir := "logs/llm"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return // Silently fail if can't create directory
+	}
+
+	timestamp := time.Now()
+	filename := fmt.Sprintf("%s/%s_request_%s.json", 
+		logDir, 
+		strings.ToLower(provider),
+		timestamp.Format("20060102_150405.000"))
+	
+	logEntry := map[string]interface{}{
+		"timestamp": timestamp.Format(time.RFC3339Nano),
+		"provider":  provider,
+		"url":       url,
+		"headers":   headers, // Full headers including API keys
+		"request":   requestBody,
+	}
+	
+	jsonData, err := json.MarshalIndent(logEntry, "", "  ")
+	if err != nil {
+		return
+	}
+	
+	os.WriteFile(filename, jsonData, 0644)
+}
+
+// saveLLMResponseToFile saves the complete LLM response to a JSON file
+func (l *Logger) saveLLMResponseToFile(provider string, statusCode int, responseBody interface{}, rawBody []byte) {
+	logDir := "logs/llm"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return // Silently fail if can't create directory
+	}
+
+	timestamp := time.Now()
+	filename := fmt.Sprintf("%s/%s_response_%s.json", 
+		logDir, 
+		strings.ToLower(provider),
+		timestamp.Format("20060102_150405.000"))
+	
+	logEntry := map[string]interface{}{
+		"timestamp":    timestamp.Format(time.RFC3339Nano),
+		"provider":     provider,
+		"status_code":  statusCode,
+		"response":     responseBody,
+		"raw_response": string(rawBody),
+	}
+	
+	jsonData, err := json.MarshalIndent(logEntry, "", "  ")
+	if err != nil {
+		return
+	}
+	
+	os.WriteFile(filename, jsonData, 0644)
 }
 

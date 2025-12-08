@@ -416,7 +416,7 @@ func callQwen(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse
 		Model:     cfg.Qwen.Model,
 		Messages:  messages,
 		Tools:     toolsList,
-		MaxTokens: 50000,
+		MaxTokens: 16384, // 千问 API 最大值为 16384
 	}
 
 	jsonData, _ := json.Marshal(reqBody)
@@ -424,6 +424,15 @@ func callQwen(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse
 	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.Qwen.APIKey)
+
+	// Log request
+	headers := make(map[string]string)
+	for k, v := range req.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+	utils.Log.LLMRequest("qwen", url, headers, reqBody)
 
 	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
@@ -435,13 +444,20 @@ func callQwen(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
+		// Log error response
+		utils.Log.LLMResponse("qwen", resp.StatusCode, nil, body)
 		return nil, fmt.Errorf("Qwen API error: %s", string(body))
 	}
 
 	var llmResp LLMResponse
 	if err := json.Unmarshal(body, &llmResp); err != nil {
+		// Log error response
+		utils.Log.LLMResponse("qwen", resp.StatusCode, nil, body)
 		return nil, err
 	}
+
+	// Log successful response
+	utils.Log.LLMResponse("qwen", resp.StatusCode, &llmResp, body)
 
 	// Handle tool calls in response
 	for i := range llmResp.Choices {
@@ -485,13 +501,22 @@ func processToolCallsQwen(cfg *config.Config, initialPrompt string, toolsList []
 		Model:     cfg.Qwen.Model,
 		Messages:  messages,
 		Tools:     toolsList,
-		MaxTokens: 50000,
+		MaxTokens: 16384, // 千问 API 最大值为 16384
 	}
 
 	jsonData, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.Qwen.APIKey)
+
+	// Log request
+	headers := make(map[string]string)
+	for k, v := range req.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+	utils.Log.LLMRequest("qwen", url, headers, reqBody)
 
 	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
@@ -502,13 +527,20 @@ func processToolCallsQwen(cfg *config.Config, initialPrompt string, toolsList []
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		// Log error response
+		utils.Log.LLMResponse("qwen", resp.StatusCode, nil, body)
 		return nil, fmt.Errorf("Qwen API error: %s", string(body))
 	}
 
 	var llmResp LLMResponse
 	if err := json.Unmarshal(body, &llmResp); err != nil {
+		// Log error response
+		utils.Log.LLMResponse("qwen", resp.StatusCode, nil, body)
 		return nil, err
 	}
+
+	// Log successful response
+	utils.Log.LLMResponse("qwen", resp.StatusCode, &llmResp, body)
 
 	// Check if more tool calls are needed
 	for _, choice := range llmResp.Choices {
@@ -543,6 +575,15 @@ func callOpenAI(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespon
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.OpenAI.APIKey)
 
+	// Log request
+	headers := make(map[string]string)
+	for k, v := range req.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+	utils.Log.LLMRequest("openai", url, headers, reqBody)
+
 	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -553,13 +594,20 @@ func callOpenAI(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespon
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
+		// Log error response
+		utils.Log.LLMResponse("openai", resp.StatusCode, nil, body)
 		return nil, fmt.Errorf("OpenAI API error: %s", string(body))
 	}
 
 	var llmResp LLMResponse
 	if err := json.Unmarshal(body, &llmResp); err != nil {
+		// Log error response
+		utils.Log.LLMResponse("openai", resp.StatusCode, nil, body)
 		return nil, err
 	}
+
+	// Log successful response
+	utils.Log.LLMResponse("openai", resp.StatusCode, &llmResp, body)
 
 	// Handle tool calls in response
 	for i := range llmResp.Choices {
@@ -613,6 +661,15 @@ func processToolCallsOpenAI(cfg *config.Config, initialPrompt string, toolsList 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.OpenAI.APIKey)
 
+	// Log request
+	headers := make(map[string]string)
+	for k, v := range req.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+	utils.Log.LLMRequest("openai", url, headers, reqBody)
+
 	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -622,13 +679,20 @@ func processToolCallsOpenAI(cfg *config.Config, initialPrompt string, toolsList 
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		// Log error response
+		utils.Log.LLMResponse("openai", resp.StatusCode, nil, body)
 		return nil, fmt.Errorf("OpenAI API error: %s", string(body))
 	}
 
 	var llmResp LLMResponse
 	if err := json.Unmarshal(body, &llmResp); err != nil {
+		// Log error response
+		utils.Log.LLMResponse("openai", resp.StatusCode, nil, body)
 		return nil, err
 	}
+
+	// Log successful response
+	utils.Log.LLMResponse("openai", resp.StatusCode, &llmResp, body)
 
 	// Check if more tool calls are needed
 	for _, choice := range llmResp.Choices {
@@ -647,8 +711,8 @@ func callAnthropic(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRes
 	anthropicTools := make([]map[string]interface{}, len(toolsList))
 	for i, tool := range toolsList {
 		anthropicTools[i] = map[string]interface{}{
-			"name":        tool.Function.Name,
-			"description": tool.Function.Description,
+			"name":         tool.Function.Name,
+			"description":  tool.Function.Description,
 			"input_schema": tool.Function.Parameters,
 		}
 	}
@@ -672,6 +736,15 @@ func callAnthropic(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRes
 	req.Header.Set("x-api-key", cfg.Anthropic.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
+	// Log request
+	headers := make(map[string]string)
+	for k, v := range req.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+	utils.Log.LLMRequest("anthropic", url, headers, reqBody)
+
 	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -682,14 +755,21 @@ func callAnthropic(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRes
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
+		// Log error response
+		utils.Log.LLMResponse("anthropic", resp.StatusCode, nil, body)
 		return nil, fmt.Errorf("Anthropic API error: %s", string(body))
 	}
 
 	// Parse Anthropic response format
 	var anthropicResp map[string]interface{}
 	if err := json.Unmarshal(body, &anthropicResp); err != nil {
+		// Log error response
+		utils.Log.LLMResponse("anthropic", resp.StatusCode, nil, body)
 		return nil, err
 	}
+
+	// Log successful response
+	utils.Log.LLMResponse("anthropic", resp.StatusCode, anthropicResp, body)
 
 	// Convert to our format
 	llmResp := &LLMResponse{
@@ -770,9 +850,9 @@ func processToolCallsAnthropic(cfg *config.Config, initialPrompt string, toolsLi
 
 					resultJSON, _ := json.Marshal(result)
 					toolResults = append(toolResults, map[string]interface{}{
-						"type":       "tool_result",
+						"type":        "tool_result",
 						"tool_use_id": toolID,
-						"content":    string(resultJSON),
+						"content":     string(resultJSON),
 					})
 				}
 			}
@@ -805,8 +885,8 @@ func processToolCallsAnthropic(cfg *config.Config, initialPrompt string, toolsLi
 	anthropicTools := make([]map[string]interface{}, len(toolsList))
 	for i, tool := range toolsList {
 		anthropicTools[i] = map[string]interface{}{
-			"name":        tool.Function.Name,
-			"description": tool.Function.Description,
+			"name":         tool.Function.Name,
+			"description":  tool.Function.Description,
 			"input_schema": tool.Function.Parameters,
 		}
 	}
@@ -825,6 +905,15 @@ func processToolCallsAnthropic(cfg *config.Config, initialPrompt string, toolsLi
 	req.Header.Set("x-api-key", cfg.Anthropic.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
+	// Log request
+	headers := make(map[string]string)
+	for k, v := range req.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+	utils.Log.LLMRequest("anthropic", url, headers, reqBody)
+
 	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -834,13 +923,20 @@ func processToolCallsAnthropic(cfg *config.Config, initialPrompt string, toolsLi
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		// Log error response
+		utils.Log.LLMResponse("anthropic", resp.StatusCode, nil, body)
 		return nil, fmt.Errorf("Anthropic API error: %s", string(body))
 	}
 
 	var anthropicResp map[string]interface{}
-	if err := json.Unmarshal(body, &anthropicResp); err != nil {
+	if err = json.Unmarshal(body, &anthropicResp); err != nil {
+		// Log error response
+		utils.Log.LLMResponse("anthropic", resp.StatusCode, nil, body)
 		return nil, err
 	}
+
+	// Log successful response
+	utils.Log.LLMResponse("anthropic", resp.StatusCode, anthropicResp, body)
 
 	// Check for more tool calls
 	if content, ok := anthropicResp["content"].([]interface{}); ok {
@@ -881,4 +977,3 @@ func processToolCallsAnthropic(cfg *config.Config, initialPrompt string, toolsLi
 
 	return llmResp, nil
 }
-
