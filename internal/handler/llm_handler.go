@@ -1,4 +1,4 @@
-package middleware
+package handler
 
 import (
 	"bytes"
@@ -9,12 +9,167 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/nokode/nokode/internal/config"
 	"github.com/nokode/nokode/internal/tools"
 	"github.com/nokode/nokode/internal/utils"
 )
+
+func HandleLLMRequest(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		requestStartTime := time.Now()
+		requestID := uuid.New().String()[:9]
+
+		// Get the actual path (go-zero might have path parameters)
+		path := r.URL.Path
+		// Replace path parameters with actual values for logging
+		utils.Log.Request(r.Method, path, map[string]interface{}{
+			"requestId": requestID,
+			"query":     r.URL.Query(),
+			"ip":        getClientIP(r),
+		})
+
+		// Prepare request context
+		var bodyBytes []byte
+		if r.Body != nil {
+			bodyBytes, _ = io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		}
+
+		var body interface{}
+		if len(bodyBytes) > 0 {
+			json.Unmarshal(bodyBytes, &body)
+		}
+
+		// Load memory and prompt
+		memory := utils.LoadMemory()
+		promptTemplate := utils.LoadPrompt()
+		schema := tools.GetCachedSchema()
+		dbContext := tools.GetDatabaseContext()
+
+		// Replace template variables
+		queryJSON, _ := json.Marshal(r.URL.Query())
+		headersJSON, _ := json.Marshal(r.Header)
+		bodyJSON, _ := json.Marshal(body)
+
+		vars := map[string]string{
+			"METHOD":    r.Method,
+			"PATH":      path,
+			"URL":       r.URL.String(),
+			"QUERY":     string(queryJSON),
+			"HEADERS":   string(headersJSON),
+			"BODY":      string(bodyJSON),
+			"IP":        getClientIP(r),
+			"TIMESTAMP": time.Now().Format(time.RFC3339),
+			"MEMORY":    memory + schema + dbContext,
+		}
+
+		prompt := utils.ReplaceTemplateVars(promptTemplate, vars)
+
+		// Define tools
+		toolsList := getTools()
+
+		// Call LLM
+		llmStartTime := time.Now()
+		response, err := callLLM(cfg, prompt, toolsList)
+		llmDuration := time.Since(llmStartTime).Milliseconds()
+
+		if err != nil {
+			utils.Log.Error("llm", "LLM call failed", err)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, `
+				<html>
+					<body>
+						<h1>Server Error</h1>
+						<p>An error occurred while processing your request.</p>
+						<p><strong>Request ID:</strong> %s</p>
+						<pre>%s</pre>
+					</body>
+				</html>
+			`, requestID, err.Error())
+			return
+		}
+
+		utils.Log.Info("llm", fmt.Sprintf("LLM call completed in %dms", llmDuration), map[string]interface{}{
+			"requestId": requestID,
+			"duration":  llmDuration,
+		})
+
+		// Check if we need to process tool calls first (OpenAI only)
+		// Anthropic tool calls are handled in callAnthropic
+		if cfg.Provider == "openai" {
+			needsToolProcessing := false
+			for _, choice := range response.Choices {
+				if choice.FinishReason == "tool_calls" {
+					needsToolProcessing = true
+					break
+				}
+			}
+
+			// If tool calls are needed, process them recursively
+			if needsToolProcessing {
+				finalResponse, err := processToolCallsRecursive(cfg, prompt, toolsList, response)
+				if err != nil {
+					utils.Log.Error("llm", "Failed to process tool calls", err)
+				} else {
+					response = finalResponse
+				}
+			}
+		}
+
+		// Extract webResponse from final response
+		webResponse := extractWebResponse(response)
+
+		// Send response
+		totalDuration := time.Since(requestStartTime).Milliseconds()
+		if webResponse != nil {
+			// Set status code
+			w.WriteHeader(webResponse.StatusCode)
+
+			// Set headers
+			for key, value := range webResponse.Headers {
+				w.Header().Set(key, value)
+			}
+
+			// Send body
+			w.Write([]byte(webResponse.Body))
+			utils.Log.Success("response", fmt.Sprintf("Sent webResponse (%d) in %dms", webResponse.StatusCode, totalDuration), nil)
+		} else {
+			// Fallback: return text response
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("No response generated"))
+			utils.Log.Warn("response", "No webResponse found, returning default", nil)
+		}
+	}
+}
+
+func getClientIP(r *http.Request) string {
+	// Try X-Forwarded-For header first
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		ips := strings.Split(xff, ",")
+		if len(ips) > 0 {
+			return strings.TrimSpace(ips[0])
+		}
+	}
+
+	// Try X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+
+	// Fall back to RemoteAddr
+	ip := r.RemoteAddr
+	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		ip = ip[:idx]
+	}
+	return ip
+}
+
+// Copy all the LLM-related types and functions from middleware
+// (ToolCall, ToolResult, Message, LLMRequest, Tool, ToolFunction, LLMResponse, Choice, Usage)
+// and all the helper functions (getTools, executeToolCall, extractWebResponse, etc.)
 
 type ToolCall struct {
 	Type      string                 `json:"type"`
@@ -43,8 +198,8 @@ type LLMRequest struct {
 }
 
 type Tool struct {
-	Type        string                 `json:"type"`
-	Function    ToolFunction           `json:"function"`
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
 }
 
 type ToolFunction struct {
@@ -54,148 +209,21 @@ type ToolFunction struct {
 }
 
 type LLMResponse struct {
-	ID      string    `json:"id"`
-	Choices []Choice  `json:"choices"`
-	Usage   Usage     `json:"usage"`
+	ID      string   `json:"id"`
+	Choices []Choice `json:"choices"`
+	Usage   Usage    `json:"usage"`
 }
 
 type Choice struct {
-	Index        int         `json:"index"`
-	Message      Message     `json:"message"`
-	FinishReason string      `json:"finish_reason"`
+	Index        int     `json:"index"`
+	Message      Message `json:"message"`
+	FinishReason string  `json:"finish_reason"`
 }
 
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
-}
-
-func HandleLLMRequest(cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		requestStartTime := time.Now()
-		requestID := uuid.New().String()[:9]
-
-		utils.Log.Request(c.Request.Method, c.Request.URL.Path, map[string]interface{}{
-			"requestId": requestID,
-			"query":     c.Request.URL.Query(),
-			"ip":        c.ClientIP(),
-		})
-
-		// Prepare request context
-		var bodyBytes []byte
-		if c.Request.Body != nil {
-			bodyBytes, _ = io.ReadAll(c.Request.Body)
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-		}
-
-		var body interface{}
-		if len(bodyBytes) > 0 {
-			json.Unmarshal(bodyBytes, &body)
-		}
-
-		// Load memory and prompt
-		memory := utils.LoadMemory()
-		promptTemplate := utils.LoadPrompt()
-		schema := tools.GetCachedSchema()
-		dbContext := tools.GetDatabaseContext()
-
-		// Replace template variables
-		queryJSON, _ := json.Marshal(c.Request.URL.Query())
-		headersJSON, _ := json.Marshal(c.Request.Header)
-		bodyJSON, _ := json.Marshal(body)
-
-		vars := map[string]string{
-			"METHOD":    c.Request.Method,
-			"PATH":      c.Request.URL.Path,
-			"URL":       c.Request.URL.String(),
-			"QUERY":     string(queryJSON),
-			"HEADERS":   string(headersJSON),
-			"BODY":      string(bodyJSON),
-			"IP":        c.ClientIP(),
-			"TIMESTAMP": time.Now().Format(time.RFC3339),
-			"MEMORY":    memory + schema + dbContext,
-		}
-
-		prompt := utils.ReplaceTemplateVars(promptTemplate, vars)
-
-		// Define tools
-		toolsList := getTools()
-
-		// Call LLM
-		llmStartTime := time.Now()
-		response, err := callLLM(cfg, prompt, toolsList)
-		llmDuration := time.Since(llmStartTime).Milliseconds()
-
-		if err != nil {
-			utils.Log.Error("llm", "LLM call failed", err)
-			c.HTML(http.StatusInternalServerError, "", fmt.Sprintf(`
-				<html>
-					<body>
-						<h1>Server Error</h1>
-						<p>An error occurred while processing your request.</p>
-						<p><strong>Request ID:</strong> %s</p>
-						<pre>%s</pre>
-					</body>
-				</html>
-			`, requestID, err.Error()))
-			return
-		}
-
-		utils.Log.Info("llm", fmt.Sprintf("LLM call completed in %dms", llmDuration), map[string]interface{}{
-			"requestId": requestID,
-			"duration":  llmDuration,
-		})
-
-		// Extract webResponse from the final response
-		// The processToolCalls functions handle tool execution and return final response
-		var webResponse *tools.WebResponse
-		
-		// Check if we need to process tool calls first (OpenAI only)
-		// Anthropic tool calls are handled in callAnthropic
-		if cfg.Provider == "openai" {
-			needsToolProcessing := false
-			for _, choice := range response.Choices {
-				if choice.FinishReason == "tool_calls" {
-					needsToolProcessing = true
-					break
-				}
-			}
-			
-			// If tool calls are needed, process them recursively
-			if needsToolProcessing {
-				finalResponse, err := processToolCallsRecursive(cfg, prompt, toolsList, response)
-				if err != nil {
-					utils.Log.Error("llm", "Failed to process tool calls", err)
-				} else {
-					response = finalResponse
-				}
-			}
-		}
-		
-		// Extract webResponse from final response
-		webResponse = extractWebResponse(response)
-
-		// Send response
-		totalDuration := time.Since(requestStartTime).Milliseconds()
-		if webResponse != nil {
-			// Set status code
-			c.Status(webResponse.StatusCode)
-
-			// Set headers
-			for key, value := range webResponse.Headers {
-				c.Header(key, value)
-			}
-
-			// Send body
-			c.String(webResponse.StatusCode, webResponse.Body)
-			utils.Log.Success("response", fmt.Sprintf("Sent webResponse (%d) in %dms", webResponse.StatusCode, totalDuration), nil)
-		} else {
-			// Fallback: return text response
-			c.String(http.StatusOK, "No response generated")
-			utils.Log.Warn("response", "No webResponse found, returning default", nil)
-		}
-	}
 }
 
 func getTools() []Tool {
@@ -328,6 +356,38 @@ func executeToolCall(tcMap map[string]interface{}) interface{} {
 	}
 }
 
+func extractWebResponse(response *LLMResponse) *tools.WebResponse {
+	// Look through all choices for webResponse tool result
+	for _, choice := range response.Choices {
+		if choice.Message.Role == "assistant" {
+			// Check if content is a string that might contain webResponse info
+			if contentStr, ok := choice.Message.Content.(string); ok {
+				// Try to parse as JSON to find webResponse
+				var result map[string]interface{}
+				if err := json.Unmarshal([]byte(contentStr), &result); err == nil {
+					if statusCode, ok := result["statusCode"].(float64); ok {
+						body, _ := result["body"].(string)
+						contentType, _ := result["contentType"].(string)
+						wr := tools.CreateWebResponse(int(statusCode), contentType, body)
+						return &wr
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func processToolCallsRecursive(cfg *config.Config, initialPrompt string, toolsList []Tool, initialResp *LLMResponse) (*LLMResponse, error) {
+	if cfg.Provider == "openai" {
+		return processToolCallsOpenAI(cfg, initialPrompt, toolsList, initialResp)
+	} else {
+		// Anthropic tool calls are handled in callAnthropic function
+		// This should not be called for Anthropic as tool calls are handled there
+		return initialResp, nil
+	}
+}
+
 func callLLM(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse, error) {
 	if cfg.Provider == "openai" {
 		return callOpenAI(cfg, prompt, toolsList)
@@ -390,38 +450,6 @@ func callOpenAI(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespon
 	return &llmResp, nil
 }
 
-func extractWebResponse(response *LLMResponse) *tools.WebResponse {
-	// Look through all choices for webResponse tool result
-	for _, choice := range response.Choices {
-		if choice.Message.Role == "assistant" {
-			// Check if content is a string that might contain webResponse info
-			if contentStr, ok := choice.Message.Content.(string); ok {
-				// Try to parse as JSON to find webResponse
-				var result map[string]interface{}
-				if err := json.Unmarshal([]byte(contentStr), &result); err == nil {
-					if statusCode, ok := result["statusCode"].(float64); ok {
-						body, _ := result["body"].(string)
-						contentType, _ := result["contentType"].(string)
-						wr := tools.CreateWebResponse(int(statusCode), contentType, body)
-						return &wr
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func processToolCallsRecursive(cfg *config.Config, initialPrompt string, toolsList []Tool, initialResp *LLMResponse) (*LLMResponse, error) {
-	if cfg.Provider == "openai" {
-		return processToolCallsOpenAI(cfg, initialPrompt, toolsList, initialResp)
-	} else {
-		// Anthropic tool calls are handled in callAnthropic function
-		// This should not be called for Anthropic as tool calls are handled there
-		return initialResp, nil
-	}
-}
-
 func processToolCallsOpenAI(cfg *config.Config, initialPrompt string, toolsList []Tool, initialResp *LLMResponse) (*LLMResponse, error) {
 	messages := []Message{
 		{
@@ -429,7 +457,7 @@ func processToolCallsOpenAI(cfg *config.Config, initialPrompt string, toolsList 
 			Content: initialPrompt,
 		},
 	}
-	
+
 	// Add assistant message with tool calls
 	if len(initialResp.Choices) > 0 {
 		messages = append(messages, Message{
@@ -489,6 +517,102 @@ func processToolCallsOpenAI(cfg *config.Config, initialPrompt string, toolsList 
 	return &llmResp, nil
 }
 
+func callAnthropic(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse, error) {
+	url := "https://api.anthropic.com/v1/messages"
+
+	// Convert tools to Anthropic format
+	anthropicTools := make([]map[string]interface{}, len(toolsList))
+	for i, tool := range toolsList {
+		anthropicTools[i] = map[string]interface{}{
+			"name":        tool.Function.Name,
+			"description": tool.Function.Description,
+			"input_schema": tool.Function.Parameters,
+		}
+	}
+
+	reqBody := map[string]interface{}{
+		"model":      cfg.Anthropic.Model,
+		"max_tokens": 50000,
+		"messages": []map[string]interface{}{
+			{
+				"role":    "user",
+				"content": prompt,
+			},
+		},
+		"tools": anthropicTools,
+	}
+
+	jsonData, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", cfg.Anthropic.APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	client := &http.Client{Timeout: 300 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Anthropic API error: %s", string(body))
+	}
+
+	// Parse Anthropic response format
+	var anthropicResp map[string]interface{}
+	if err := json.Unmarshal(body, &anthropicResp); err != nil {
+		return nil, err
+	}
+
+	// Convert to our format
+	llmResp := &LLMResponse{
+		Choices: []Choice{},
+	}
+
+	if content, ok := anthropicResp["content"].([]interface{}); ok {
+		// Check for tool use
+		hasToolUse := false
+		for _, item := range content {
+			if itemMap, ok := item.(map[string]interface{}); ok {
+				if itemType, ok := itemMap["type"].(string); ok && itemType == "tool_use" {
+					hasToolUse = true
+					break
+				}
+			}
+		}
+
+		if hasToolUse {
+			// Process tool calls
+			return processToolCallsAnthropic(cfg, prompt, toolsList, anthropicResp)
+		}
+
+		// Regular text response
+		var textContent strings.Builder
+		for _, item := range content {
+			if itemMap, ok := item.(map[string]interface{}); ok {
+				if itemType, ok := itemMap["type"].(string); ok && itemType == "text" {
+					if text, ok := itemMap["text"].(string); ok {
+						textContent.WriteString(text)
+					}
+				}
+			}
+		}
+
+		llmResp.Choices = append(llmResp.Choices, Choice{
+			Message: Message{
+				Role:    "assistant",
+				Content: textContent.String(),
+			},
+		})
+	}
+
+	return llmResp, nil
+}
+
 func processToolCallsAnthropic(cfg *config.Config, initialPrompt string, toolsList []Tool, initialResp map[string]interface{}) (*LLMResponse, error) {
 	messages := []map[string]interface{}{
 		{
@@ -508,14 +632,14 @@ func processToolCallsAnthropic(cfg *config.Config, initialPrompt string, toolsLi
 	// Execute tool calls and build tool results
 	toolResults := []map[string]interface{}{}
 	var webResponse *tools.WebResponse
-	
+
 	if content, ok := initialResp["content"].([]interface{}); ok {
 		for _, item := range content {
 			if itemMap, ok := item.(map[string]interface{}); ok {
 				if itemType, ok := itemMap["type"].(string); ok && itemType == "tool_use" {
 					toolID, _ := itemMap["id"].(string)
 					result := executeToolCall(itemMap)
-					
+
 					// Check if this is a webResponse
 					if wr, ok := result.(*tools.WebResponse); ok {
 						webResponse = wr
@@ -613,102 +737,6 @@ func processToolCallsAnthropic(cfg *config.Config, initialPrompt string, toolsLi
 	}
 
 	if content, ok := anthropicResp["content"].([]interface{}); ok {
-		var textContent strings.Builder
-		for _, item := range content {
-			if itemMap, ok := item.(map[string]interface{}); ok {
-				if itemType, ok := itemMap["type"].(string); ok && itemType == "text" {
-					if text, ok := itemMap["text"].(string); ok {
-						textContent.WriteString(text)
-					}
-				}
-			}
-		}
-
-		llmResp.Choices = append(llmResp.Choices, Choice{
-			Message: Message{
-				Role:    "assistant",
-				Content: textContent.String(),
-			},
-		})
-	}
-
-	return llmResp, nil
-}
-
-func callAnthropic(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse, error) {
-	url := "https://api.anthropic.com/v1/messages"
-
-	// Convert tools to Anthropic format
-	anthropicTools := make([]map[string]interface{}, len(toolsList))
-	for i, tool := range toolsList {
-		anthropicTools[i] = map[string]interface{}{
-			"name":        tool.Function.Name,
-			"description": tool.Function.Description,
-			"input_schema": tool.Function.Parameters,
-		}
-	}
-
-	reqBody := map[string]interface{}{
-		"model":       cfg.Anthropic.Model,
-		"max_tokens":  50000,
-		"messages": []map[string]interface{}{
-			{
-				"role":    "user",
-				"content": prompt,
-			},
-		},
-		"tools": anthropicTools,
-	}
-
-	jsonData, _ := json.Marshal(reqBody)
-
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", cfg.Anthropic.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	client := &http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Anthropic API error: %s", string(body))
-	}
-
-	// Parse Anthropic response format
-	var anthropicResp map[string]interface{}
-	if err := json.Unmarshal(body, &anthropicResp); err != nil {
-		return nil, err
-	}
-
-	// Convert to our format
-	llmResp := &LLMResponse{
-		Choices: []Choice{},
-	}
-
-	if content, ok := anthropicResp["content"].([]interface{}); ok {
-		// Check for tool use
-		hasToolUse := false
-		for _, item := range content {
-			if itemMap, ok := item.(map[string]interface{}); ok {
-				if itemType, ok := itemMap["type"].(string); ok && itemType == "tool_use" {
-					hasToolUse = true
-					break
-				}
-			}
-		}
-
-		if hasToolUse {
-			// Process tool calls
-			return processToolCallsAnthropic(cfg, prompt, toolsList, anthropicResp)
-		}
-
-		// Regular text response
 		var textContent strings.Builder
 		for _, item := range content {
 			if itemMap, ok := item.(map[string]interface{}); ok {
