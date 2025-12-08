@@ -2,9 +2,11 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -13,7 +15,99 @@ import (
 	"github.com/nokode/nokode/internal/config"
 	"github.com/nokode/nokode/internal/tools"
 	"github.com/nokode/nokode/internal/utils"
+	openai "github.com/sashabaranov/go-openai"
 )
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// createHTTPClient creates an HTTP client with proper timeout and DNS configuration
+func createHTTPClient() *http.Client {
+	// Create a custom dialer with timeout
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second, // DNS lookup and connection timeout
+		KeepAlive: 30 * time.Second,
+	}
+
+	// Create transport with custom dialer
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	}
+
+	return &http.Client{
+		Timeout:   300 * time.Second, // Total request timeout
+		Transport: transport,
+	}
+}
+
+// doHTTPRequestWithRetry performs HTTP request with retry logic for network errors
+func doHTTPRequestWithRetry(client *http.Client, req *http.Request, maxRetries int) (*http.Response, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 1s, 2s, 4s
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			utils.Log.Warn("llm", fmt.Sprintf("Retrying request (attempt %d/%d) after %v", attempt, maxRetries, backoff), nil)
+			time.Sleep(backoff)
+		}
+
+		resp, err := client.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+
+		// Check if it's a network error that might be retryable
+		if isRetryableError(err) {
+			utils.Log.Warn("llm", fmt.Sprintf("Network error (attempt %d/%d): %v", attempt+1, maxRetries+1, err), nil)
+			continue
+		}
+
+		// Non-retryable error, return immediately
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("request failed after %d attempts: %w", maxRetries+1, lastErr)
+}
+
+// isRetryableError checks if an error is retryable (network/DNS issues)
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	retryablePatterns := []string{
+		"timeout",
+		"connection refused",
+		"connection reset",
+		"no such host",
+		"i/o timeout",
+		"lookup",
+		"temporary failure",
+		"network is unreachable",
+	}
+
+	for _, pattern := range retryablePatterns {
+		if strings.Contains(strings.ToLower(errStr), pattern) {
+			return true
+		}
+	}
+
+	return false
+}
 
 func HandleLLMRequest(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -402,26 +496,49 @@ func callLLM(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse,
 }
 
 func callQwen(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse, error) {
-	// 阿里云千问使用兼容 OpenAI 的 API 格式
+	// 直接使用 HTTP 请求调用千问（兼容 OpenAI 格式），避免 SDK 序列化问题
 	url := "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 
-	messages := []Message{
+	// 构建消息列表，确保 content 是字符串类型
+	messages := []map[string]interface{}{
 		{
-			Role:    "user",
-			Content: prompt,
+			"role":    "user",
+			"content": prompt, // 确保是字符串类型
 		},
 	}
 
-	reqBody := LLMRequest{
-		Model:     cfg.Qwen.Model,
-		Messages:  messages,
-		Tools:     toolsList,
-		MaxTokens: 16384, // 千问 API 最大值为 16384
+	// 转换 tools
+	var openaiTools []map[string]interface{}
+	for _, tool := range toolsList {
+		openaiTools = append(openaiTools, map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        tool.Function.Name,
+				"description": tool.Function.Description,
+				"parameters":  tool.Function.Parameters,
+			},
+		})
 	}
 
-	jsonData, _ := json.Marshal(reqBody)
+	// 构建请求体
+	reqBody := map[string]interface{}{
+		"model":      cfg.Qwen.Model,
+		"messages":   messages,
+		"max_tokens": 16384, // 千问 API 最大值为 16384
+	}
+	if len(openaiTools) > 0 {
+		reqBody["tools"] = openaiTools
+	}
 
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.Qwen.APIKey)
 
@@ -434,122 +551,174 @@ func callQwen(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse
 	}
 	utils.Log.LLMRequest("qwen", url, headers, reqBody)
 
-	client := &http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Do(req)
+	client := createHTTPClient()
+	resp, err := doHTTPRequestWithRetry(client, req, 3) // Retry up to 3 times
 	if err != nil {
-		return nil, err
+		utils.Log.Error("llm", "Network error calling Qwen API after retries", err)
+		return nil, fmt.Errorf("network error: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Log error response
 		utils.Log.LLMResponse("qwen", resp.StatusCode, nil, body)
-		return nil, fmt.Errorf("Qwen API error: %s", string(body))
+		return nil, fmt.Errorf("Qwen API error: status %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	var llmResp LLMResponse
-	if err := json.Unmarshal(body, &llmResp); err != nil {
-		// Log error response
+	// 解析响应
+	var openaiResp openai.ChatCompletionResponse
+	if err := json.Unmarshal(body, &openaiResp); err != nil {
 		utils.Log.LLMResponse("qwen", resp.StatusCode, nil, body)
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	// Log successful response
-	utils.Log.LLMResponse("qwen", resp.StatusCode, &llmResp, body)
+	// Log response
+	respJSON, _ := json.MarshalIndent(openaiResp, "", "  ")
+	utils.Log.LLMResponse("qwen", resp.StatusCode, openaiResp, respJSON)
+
+	// 转换为我们的格式
+	llmResp := &LLMResponse{
+		Choices: []Choice{},
+	}
+
+	for _, choice := range openaiResp.Choices {
+		llmChoice := Choice{
+			Message: Message{
+				Role:    choice.Message.Role,
+				Content: choice.Message.Content,
+			},
+			FinishReason: string(choice.FinishReason),
+		}
+
+		// 处理 tool calls
+		if len(choice.Message.ToolCalls) > 0 {
+			llmChoice.FinishReason = "tool_calls"
+		}
+
+		llmResp.Choices = append(llmResp.Choices, llmChoice)
+	}
 
 	// Handle tool calls in response
 	for i := range llmResp.Choices {
 		choice := &llmResp.Choices[i]
 		if choice.FinishReason == "tool_calls" {
 			// Process tool calls and make another request
-			return processToolCallsQwen(cfg, prompt, toolsList, &llmResp)
+			return processToolCallsQwen(cfg, prompt, toolsList, llmResp)
 		}
 	}
 
-	return &llmResp, nil
+	return llmResp, nil
 }
 
 func processToolCallsQwen(cfg *config.Config, initialPrompt string, toolsList []Tool, initialResp *LLMResponse) (*LLMResponse, error) {
-	messages := []Message{
-		{
-			Role:    "user",
-			Content: initialPrompt,
-		},
+	// 使用 OpenAI SDK 调用千问（兼容 OpenAI 格式）
+	baseURL := "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+	// 创建 OpenAI 客户端配置，设置千问的 base URL
+	config := openai.DefaultConfig(cfg.Qwen.APIKey)
+	config.BaseURL = baseURL
+	client := openai.NewClientWithConfig(config)
+
+	// 构建消息列表
+	// 使用零值初始化，确保 MultiContent 为 nil
+	userMsg := openai.ChatCompletionMessage{}
+	userMsg.Role = openai.ChatMessageRoleUser
+	userMsg.Content = initialPrompt
+	messages := []openai.ChatCompletionMessage{userMsg}
+
+	// 添加 assistant 消息
+	if len(initialResp.Choices) > 0 {
+		choice := initialResp.Choices[0]
+		// 使用零值初始化，确保 MultiContent 为 nil
+		assistantMsg := openai.ChatCompletionMessage{}
+		assistantMsg.Role = openai.ChatMessageRoleAssistant
+
+		if content, ok := choice.Message.Content.(string); ok {
+			assistantMsg.Content = content
+		}
+
+		// TODO: 处理 tool calls 和 tool results
+		// 这里需要根据实际的 tool calls 结果来构建消息
+
+		messages = append(messages, assistantMsg)
 	}
 
-	// Add assistant message with tool calls
-	if len(initialResp.Choices) > 0 {
-		messages = append(messages, Message{
-			Role:    "assistant",
-			Content: initialResp.Choices[0].Message.Content,
+	// 转换 tools
+	var openaiTools []openai.Tool
+	for _, tool := range toolsList {
+		openaiTools = append(openaiTools, openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        tool.Function.Name,
+				Description: tool.Function.Description,
+				Parameters:  tool.Function.Parameters,
+			},
 		})
 	}
 
-	// Execute tool calls and add results
-	// Note: Qwen response structure is compatible with OpenAI
-	for _, choice := range initialResp.Choices {
-		// Try to get tool_calls from message
-		// In real implementation, we'd need to properly unmarshal the response
-		_ = choice // Placeholder
-	}
-
-	// Make another request with tool results
-	url := "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-	reqBody := LLMRequest{
+	// 构建请求
+	req := openai.ChatCompletionRequest{
 		Model:     cfg.Qwen.Model,
 		Messages:  messages,
-		Tools:     toolsList,
-		MaxTokens: 16384, // 千问 API 最大值为 16384
+		MaxTokens: 16384,
 	}
-
-	jsonData, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.Qwen.APIKey)
+	if len(openaiTools) > 0 {
+		req.Tools = openaiTools
+	}
 
 	// Log request
-	headers := make(map[string]string)
-	for k, v := range req.Header {
-		if len(v) > 0 {
-			headers[k] = v[0]
-		}
-	}
-	utils.Log.LLMRequest("qwen", url, headers, reqBody)
+	utils.Log.LLMRequest("qwen", baseURL+"/chat/completions", map[string]string{
+		"Authorization": "Bearer " + cfg.Qwen.APIKey[:min(7, len(cfg.Qwen.APIKey))] + "...",
+	}, req)
 
-	client := &http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Do(req)
+	// 调用 API
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	resp, err := client.CreateChatCompletion(ctx, req)
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		// Log error response
-		utils.Log.LLMResponse("qwen", resp.StatusCode, nil, body)
-		return nil, fmt.Errorf("Qwen API error: %s", string(body))
+		utils.Log.Error("llm", "Qwen API call failed", err)
+		return nil, fmt.Errorf("Qwen API error: %w", err)
 	}
 
-	var llmResp LLMResponse
-	if err := json.Unmarshal(body, &llmResp); err != nil {
-		// Log error response
-		utils.Log.LLMResponse("qwen", resp.StatusCode, nil, body)
-		return nil, err
+	// Log response
+	respJSON, _ := json.MarshalIndent(resp, "", "  ")
+	utils.Log.LLMResponse("qwen", 200, resp, respJSON)
+
+	// 转换为我们的格式
+	llmResp := &LLMResponse{
+		Choices: []Choice{},
 	}
 
-	// Log successful response
-	utils.Log.LLMResponse("qwen", resp.StatusCode, &llmResp, body)
+	for _, choice := range resp.Choices {
+		llmChoice := Choice{
+			Message: Message{
+				Role:    choice.Message.Role,
+				Content: choice.Message.Content,
+			},
+			FinishReason: string(choice.FinishReason),
+		}
+
+		// 处理 tool calls
+		if len(choice.Message.ToolCalls) > 0 {
+			llmChoice.FinishReason = "tool_calls"
+		}
+
+		llmResp.Choices = append(llmResp.Choices, llmChoice)
+	}
 
 	// Check if more tool calls are needed
 	for _, choice := range llmResp.Choices {
 		if choice.FinishReason == "tool_calls" {
-			return processToolCallsQwen(cfg, initialPrompt, toolsList, &llmResp)
+			return processToolCallsQwen(cfg, initialPrompt, toolsList, llmResp)
 		}
 	}
 
-	return &llmResp, nil
+	return llmResp, nil
 }
 
 func callOpenAI(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse, error) {
@@ -584,10 +753,12 @@ func callOpenAI(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespon
 	}
 	utils.Log.LLMRequest("openai", url, headers, reqBody)
 
-	client := &http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Do(req)
+	client := createHTTPClient()
+	resp, err := doHTTPRequestWithRetry(client, req, 3) // Retry up to 3 times
 	if err != nil {
-		return nil, err
+		// Log network error with more details
+		utils.Log.Error("llm", fmt.Sprintf("Network error calling Qwen API after retries: %v", err), err)
+		return nil, fmt.Errorf("network error: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -670,10 +841,12 @@ func processToolCallsOpenAI(cfg *config.Config, initialPrompt string, toolsList 
 	}
 	utils.Log.LLMRequest("openai", url, headers, reqBody)
 
-	client := &http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Do(req)
+	client := createHTTPClient()
+	resp, err := doHTTPRequestWithRetry(client, req, 3) // Retry up to 3 times
 	if err != nil {
-		return nil, err
+		// Log network error with more details
+		utils.Log.Error("llm", fmt.Sprintf("Network error calling Qwen API after retries: %v", err), err)
+		return nil, fmt.Errorf("network error: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -745,10 +918,12 @@ func callAnthropic(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRes
 	}
 	utils.Log.LLMRequest("anthropic", url, headers, reqBody)
 
-	client := &http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Do(req)
+	client := createHTTPClient()
+	resp, err := doHTTPRequestWithRetry(client, req, 3) // Retry up to 3 times
 	if err != nil {
-		return nil, err
+		// Log network error with more details
+		utils.Log.Error("llm", fmt.Sprintf("Network error calling Qwen API after retries: %v", err), err)
+		return nil, fmt.Errorf("network error: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -914,10 +1089,12 @@ func processToolCallsAnthropic(cfg *config.Config, initialPrompt string, toolsLi
 	}
 	utils.Log.LLMRequest("anthropic", url, headers, reqBody)
 
-	client := &http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Do(req)
+	client := createHTTPClient()
+	resp, err := doHTTPRequestWithRetry(client, req, 3) // Retry up to 3 times
 	if err != nil {
-		return nil, err
+		// Log network error with more details
+		utils.Log.Error("llm", fmt.Sprintf("Network error calling Qwen API after retries: %v", err), err)
+		return nil, fmt.Errorf("network error: %w", err)
 	}
 	defer resp.Body.Close()
 
