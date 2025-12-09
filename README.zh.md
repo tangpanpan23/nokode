@@ -74,25 +74,6 @@ AI 处理简单的 HTTP 路由，实现中国诗歌生成。访问 `/` 生成新
 
 所以是的，能力存在。AI 可以处理应用逻辑。它只是灾难性地慢，荒谬地昂贵，并且有金鱼般的记忆。
 
-## 截图
-
-<table>
-  <tr>
-    <td><img src="screenshots/1.png" alt="全新的空主页" width="300"/></td>
-    <td><img src="screenshots/2.png" alt="填写联系人表单" width="300"/></td>
-    <td><img src="screenshots/3.png" alt="联系人详情视图" width="300"/></td>
-  </tr>
-  <tr>
-    <td><img src="screenshots/4.png" alt="有三个联系人的主页" width="300"/></td>
-    <td><img src="screenshots/5.png" alt="另一个联系人详情" width="300"/></td>
-    <td><img src="screenshots/6.png" alt="有十个联系人的主页" width="300"/></td>
-  </tr>
-  <tr>
-    <td><img src="screenshots/7.png" alt="删除联系人后" width="300"/></td>
-    <td><img src="screenshots/8.png" alt="删除后的主页" width="300"/></td>
-    <td><img src="screenshots/9.png" alt="进化后的联系人应用" width="300"/></td>
-  </tr>
-</table>
 
 ## 结论
 

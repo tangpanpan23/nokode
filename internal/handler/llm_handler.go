@@ -242,10 +242,24 @@ func HandleLLMRequest(cfg *config.Config) http.HandlerFunc {
 		schema := tools.GetCachedSchema()
 		dbContext := tools.GetDatabaseContext()
 
+		// Parse form data if POST request
+		var formData map[string]interface{}
+		if r.Method == "POST" {
+			if err := r.ParseForm(); err == nil {
+				formData = make(map[string]interface{})
+				for key, values := range r.Form {
+					if len(values) > 0 {
+						formData[key] = values[0]
+					}
+				}
+			}
+		}
+
 		// Replace template variables
 		queryJSON, _ := json.Marshal(r.URL.Query())
 		headersJSON, _ := json.Marshal(r.Header)
 		bodyJSON, _ := json.Marshal(body)
+		formJSON, _ := json.Marshal(formData)
 
 		vars := map[string]string{
 			"METHOD":    r.Method,
@@ -254,6 +268,7 @@ func HandleLLMRequest(cfg *config.Config) http.HandlerFunc {
 			"QUERY":     string(queryJSON),
 			"HEADERS":   string(headersJSON),
 			"BODY":      string(bodyJSON),
+			"FORM":      string(formJSON),
 			"IP":        getClientIP(r),
 			"TIMESTAMP": time.Now().Format(time.RFC3339),
 			"MEMORY":    memory + schema + dbContext,
@@ -309,6 +324,65 @@ func HandleLLMRequest(cfg *config.Config) http.HandlerFunc {
 					utils.Log.Error("llm", "Failed to process tool calls", err)
 				} else {
 					response = finalResponse
+				}
+			}
+		}
+
+		// Special handling for POST /generate requests
+		if r.Method == "POST" && r.URL.Path == "/generate" {
+			if response.Choices != nil && len(response.Choices) > 0 {
+				contentInterface := response.Choices[0].Message.Content
+				content, ok := contentInterface.(string)
+				if !ok {
+					utils.Log.Error("response", "Content is not a string", nil)
+				} else {
+					// Log the raw content for debugging
+					utils.Log.Info("poem", fmt.Sprintf("AI response content: %s", content), nil)
+
+					// Try to parse as JSON poem data
+					var poemData map[string]interface{}
+					if err := json.Unmarshal([]byte(content), &poemData); err == nil {
+						// Validate required fields
+						requiredFields := []string{"title", "author", "dynasty", "content", "user_preference"}
+						valid := true
+						for _, field := range requiredFields {
+							if poemData[field] == nil {
+								utils.Log.Error("poem", fmt.Sprintf("Missing required field: %s", field), nil)
+								valid = false
+								break
+							}
+						}
+
+						if valid {
+							// Save to database
+							query := "INSERT INTO poems (title, author, dynasty, content, user_preference) VALUES (?, ?, ?, ?, ?)"
+							params := []interface{}{
+								poemData["title"],
+								poemData["author"],
+								poemData["dynasty"],
+								poemData["content"],
+								poemData["user_preference"],
+							}
+
+							result := tools.ExecuteDatabaseQuery(query, params, "insert")
+							if result.Success {
+								utils.Log.Success("poem", fmt.Sprintf("Saved poem to database: %v", poemData["title"]), nil)
+								// Generate beautiful HTML page
+								html := generatePoemDisplayHTML(poemData)
+								w.Header().Set("Content-Type", "text/html; charset=utf-8")
+								w.WriteHeader(http.StatusOK)
+								w.Write([]byte(html))
+								utils.Log.Success("response", "Generated and saved poem successfully", nil)
+								return
+							} else {
+								utils.Log.Error("poem", fmt.Sprintf("Database save failed: %s", result.Error), nil)
+							}
+						} else {
+							utils.Log.Error("poem", "JSON validation failed - missing required fields", nil)
+						}
+					} else {
+						utils.Log.Error("poem", fmt.Sprintf("JSON parse failed: %v, content: %s", err, content), nil)
+					}
 				}
 			}
 		}
@@ -644,9 +718,9 @@ type SparkWSText struct {
 }
 
 type SparkTool struct {
-	Type       string                `json:"type"`
-	Function   *SparkFunction        `json:"function,omitempty"`
-	WebSearch  *SparkWebSearch       `json:"web_search,omitempty"`
+	Type      string          `json:"type"`
+	Function  *SparkFunction  `json:"function,omitempty"`
+	WebSearch *SparkWebSearch `json:"web_search,omitempty"`
 }
 
 type SparkFunction struct {
@@ -656,8 +730,8 @@ type SparkFunction struct {
 }
 
 type SparkWebSearch struct {
-	Enable      bool   `json:"enable"`
-	SearchMode  string `json:"search_mode,omitempty"`
+	Enable     bool   `json:"enable"`
+	SearchMode string `json:"search_mode,omitempty"`
 }
 
 type SparkWSResponse struct {
@@ -739,7 +813,6 @@ func generateSparkAuthURL(appID, apiKey, apiSecret string) (string, error) {
 	return gptURL + "?" + params.Encode(), nil
 }
 
-
 func callSpark(cfg *config.Config, prompt string, toolsList []Tool) (*LLMResponse, error) {
 	// Rate limiting: ensure minimum interval between API calls
 	apiCallMutex.Lock()
@@ -758,47 +831,26 @@ func callSpark(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespons
 	// Generate Bearer token (APIpassword format: AK:SK)
 	token := generateSparkToken(cfg.Spark.APIKey, cfg.Spark.APISecret)
 
-	// Prepare tools for FunctionCall
-	var sparkTools []map[string]interface{}
-	if len(toolsList) > 0 {
-		for _, tool := range toolsList {
-			sparkTools = append(sparkTools, map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{
-					"name":        tool.Function.Name,
-					"description": tool.Function.Description,
-					"parameters":  tool.Function.Parameters,
-				},
-			})
-		}
-	}
-
-	// Prepare request body according to official documentation
+	// Prepare request body - no tools, direct HTML generation
 	requestBody := map[string]interface{}{
 		"model": cfg.Spark.Model, // spark-x for X1.5
 		"user":  "nokode-user",
 		"messages": []map[string]interface{}{
 			{
 				"role":    "system",
-				"content": "You are a contact manager. You can use database and webResponse tools to handle requests. Always use tools appropriately.",
+				"content": "You are a Chinese poetry generator. Return complete, valid HTML for every request. Do not use tools - just return HTML directly.",
 			},
 			{
 				"role":    "user",
 				"content": prompt,
 			},
 		},
-		"temperature": 0.7,
-		"max_tokens":  65535,
+		"temperature": 0.8,
+		"max_tokens":  4096,
 		"thinking": map[string]interface{}{
 			"type": "disabled", // disabled/auto/enabled
 		},
 		"stream": true,
-	}
-
-	// Add tools if available
-	if len(sparkTools) > 0 {
-		requestBody["tools"] = sparkTools
-		requestBody["tool_choice"] = "auto"
 	}
 
 	// Convert to JSON
@@ -838,9 +890,8 @@ func callSpark(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespons
 		return nil, fmt.Errorf("Spark API error: status %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	// Handle streaming response for faster response times
+	// Handle streaming response for direct HTML generation
 	var fullContent strings.Builder
-	var toolCallsFound bool
 	reader := bufio.NewReader(resp.Body)
 
 	// Set up timeout for streaming
@@ -881,69 +932,16 @@ func callSpark(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespons
 				utils.Log.LLMResponse("spark", resp.StatusCode, nil, []byte(data))
 			}
 
-			// Process chunk
+			// Process chunk - accumulate HTML content directly
 			if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
 				if choice, ok := choices[0].(map[string]interface{}); ok {
 					if delta, ok := choice["delta"].(map[string]interface{}); ok {
-						// Check for tool calls first (higher priority)
-						if toolCalls, ok := delta["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
-							toolCallsFound = true
-							for _, tc := range toolCalls {
-								if toolCall, ok := tc.(map[string]interface{}); ok {
-									if function, ok := toolCall["function"].(map[string]interface{}); ok {
-										if funcName, ok := function["name"].(string); ok && funcName == "webResponse" {
-											if argsStr, ok := function["arguments"].(string); ok {
-												var args map[string]interface{}
-												if json.Unmarshal([]byte(argsStr), &args) == nil {
-													// Extract web response parameters
-													statusCode := 200
-													if sc, ok := args["statusCode"].(float64); ok {
-														statusCode = int(sc)
-													}
-
-													contentType := "text/html"
-													if ct, ok := args["contentType"].(string); ok {
-														contentType = ct
-													}
-
-													body := ""
-													if b, ok := args["body"].(string); ok {
-														body = b
-													}
-
-													// Return immediately when webResponse tool is called
-													webResp := tools.CreateWebResponse(statusCode, contentType, body)
-
-													llmResp := &LLMResponse{
-														ID: uuid.New().String(),
-														Choices: []Choice{
-															{
-																Index: 0,
-																Message: Message{
-																	Role:    "assistant",
-																	Content: webResp.Body,
-																},
-																FinishReason: "tool_calls",
-															},
-														},
-														Usage: Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0},
-													}
-
-													utils.Log.Success("llm", "Spark streaming webResponse executed - immediate response", nil)
-													return llmResp, nil
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-
-						// Accumulate content if no tool calls
+						// Accumulate reasoning content
 						if reasoning, ok := delta["reasoning_content"].(string); ok && reasoning != "" {
 							fullContent.WriteString(reasoning)
 							fullContent.WriteString(" ")
 						}
+						// Accumulate main content (HTML)
 						if content, ok := delta["content"].(string); ok && content != "" {
 							fullContent.WriteString(content)
 						}
@@ -953,29 +951,13 @@ func callSpark(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespons
 		}
 	}
 
-	// If no tool calls found but we have content, return it
-	if !toolCallsFound && fullContent.Len() > 0 {
-		content := fullContent.String()
-		llmResp := &LLMResponse{
-			ID: uuid.New().String(),
-			Choices: []Choice{
-				{
-					Index: 0,
-					Message: Message{
-						Role:    "assistant",
-						Content: content,
-					},
-					FinishReason: "stop",
-				},
-			},
-			Usage: Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0},
-		}
-		utils.Log.Success("llm", "Spark streaming completed with content", nil)
-		return llmResp, nil
+	// Return the accumulated HTML content
+	content := fullContent.String()
+	if content == "" {
+		// Fallback response
+		content = `<html><body><h1>Chinese Poetry Generator</h1><p>AI response processing completed but no valid content generated.</p><a href="/">Home</a></body></html>`
 	}
 
-	// Fallback response
-	fallbackContent := `<html><body><h1>Contact Manager</h1><p>AI response processing completed but no valid content generated.</p><a href="/">Home</a></body></html>`
 	llmResp := &LLMResponse{
 		ID: uuid.New().String(),
 		Choices: []Choice{
@@ -983,7 +965,7 @@ func callSpark(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespons
 				Index: 0,
 				Message: Message{
 					Role:    "assistant",
-					Content: fallbackContent,
+					Content: content,
 				},
 				FinishReason: "stop",
 			},
@@ -991,8 +973,262 @@ func callSpark(cfg *config.Config, prompt string, toolsList []Tool) (*LLMRespons
 		Usage: Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0},
 	}
 
-	utils.Log.Success("llm", "Spark streaming completed with fallback", nil)
+	utils.Log.Success("llm", "Spark streaming completed with HTML content", nil)
 	return llmResp, nil
+}
+
+// generatePoemDisplayHTML generates a beautiful HTML page to display the generated poem
+func generatePoemDisplayHTML(poemData map[string]interface{}) string {
+	title := poemData["title"].(string)
+	author := poemData["author"].(string)
+	dynasty := poemData["dynasty"].(string)
+	content := poemData["content"].(string)
+	userPreference := poemData["user_preference"].(string)
+
+	// Convert dynasty to display text
+	dynastyText := "唐代"
+	if dynasty == "song" {
+		dynastyText = "宋代"
+	}
+
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>%s - 中国古典诗歌生成器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'WenQuanYi Micro Hei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea, #764ba2, #f093fb, #f5576c);
+        }
+
+        .poem-card {
+            background: #fff;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .poem-title {
+            font-size: 28px;
+            font-weight: bold;
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 15px;
+            position: relative;
+        }
+
+        .poem-title::after {
+            content: '';
+            position: absolute;
+            bottom: -5px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 60px;
+            height: 2px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            border-radius: 1px;
+        }
+
+        .poem-meta {
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 16px;
+            margin-bottom: 30px;
+            padding: 10px 0;
+            border-top: 1px solid #ecf0f1;
+            border-bottom: 1px solid #ecf0f1;
+        }
+
+        .poem-author {
+            font-weight: bold;
+            color: #34495e;
+        }
+
+        .poem-dynasty {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 8px;
+        }
+
+        .poem-content {
+            font-size: 20px;
+            line-height: 2.2;
+            color: #2c3e50;
+            text-align: center;
+            margin: 30px 0;
+            white-space: pre-line;
+            font-family: 'KaiTi', '楷体', serif;
+            letter-spacing: 1px;
+        }
+
+        .poem-content div {
+            margin: 15px 0;
+        }
+
+        .preference-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #f093fb, #f5576c);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            margin-top: 20px;
+            box-shadow: 0 4px 15px rgba(245, 87, 108, 0.3);
+        }
+
+        .actions {
+            text-align: center;
+            margin-top: 40px;
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            min-width: 120px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #f093fb, #f5576c);
+            color: white;
+            box-shadow: 0 4px 15px rgba(245, 87, 108, 0.4);
+        }
+
+        .btn-secondary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(245, 87, 108, 0.6);
+        }
+
+        .success-message {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+                margin: 10px;
+            }
+
+            .poem-card {
+                padding: 20px;
+            }
+
+            .poem-title {
+                font-size: 24px;
+            }
+
+            .poem-content {
+                font-size: 18px;
+                line-height: 2;
+            }
+
+            .actions {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .btn {
+                width: 100%;
+                max-width: 200px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="poem-card">
+            <div class="success-message">
+                ✨ 诗歌生成成功，已保存到数据库！
+            </div>
+
+            <h1 class="poem-title">%s</h1>
+
+            <div class="poem-meta">
+                <span class="poem-author">%s</span>
+                <span class="poem-dynasty">%s</span>
+            </div>
+
+            <div class="poem-content">%s</div>
+
+            <div style="text-align: center;">
+                <span class="preference-badge">根据喜好 "%s" 生成</span>
+            </div>
+
+            <div class="actions">
+                <a href="/" class="btn btn-primary">生成新诗</a>
+                <a href="/poems" class="btn btn-secondary">查看所有诗歌</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>`, title, title, author, dynastyText, content, userPreference)
 }
 
 // parseToolCalls parses tool calls from Spark API response

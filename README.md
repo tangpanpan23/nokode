@@ -74,25 +74,6 @@ But despite all that, forms actually submitted correctly. Data persisted across 
 
 So yes, the capability exists. The AI can handle application logic. It's just catastrophically slow, absurdly expensive, and has the memory of a goldfish.
 
-## Screenshots
-
-<table>
-  <tr>
-    <td><img src="screenshots/1.png" alt="Fresh empty home" width="300"/></td>
-    <td><img src="screenshots/2.png" alt="Filling out a contact form" width="300"/></td>
-    <td><img src="screenshots/3.png" alt="Contact detail view" width="300"/></td>
-  </tr>
-  <tr>
-    <td><img src="screenshots/4.png" alt="Home with three contacts" width="300"/></td>
-    <td><img src="screenshots/5.png" alt="Another contact detail" width="300"/></td>
-    <td><img src="screenshots/6.png" alt="Home with ten contacts" width="300"/></td>
-  </tr>
-  <tr>
-    <td><img src="screenshots/7.png" alt="After deleting a contact" width="300"/></td>
-    <td><img src="screenshots/8.png" alt="Home after delete" width="300"/></td>
-    <td><img src="screenshots/9.png" alt="Evolved contact app" width="300"/></td>
-  </tr>
-</table>
 
 ## The Conclusion
 
