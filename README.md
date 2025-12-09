@@ -1,6 +1,6 @@
 # nokode
 
-**A web server with no application logic. Just an LLM with three tools.**
+**A simple web server. Just an LLM with basic database operations.**
 
 [中文版](README.zh.md) | [English](README.md)
 
@@ -22,7 +22,7 @@ The goal: prove how far away we really are from that future.
 
 ## The Target
 
-Contact manager. Basic CRUD: forms, database, list views, persistence.
+Chinese poetry generator. Generate Tang and Song Dynasty poems, store in database, display on web pages.
 
 Why? Because most software is just CRUD dressed up differently. If this works at all, it would be something.
 
@@ -31,22 +31,33 @@ Why? Because most software is just CRUD dressed up differently. If this works at
 ```go
 // The entire backend (simplified)
 result := callLLM(cfg, prompt, tools)
-// Tools: database, webResponse, updateMemory
+// Tools: database, webResponse
 ```
 
-Three tools:
-- **`database`** - Execute SQL on SQLite. AI designs the schema.
-- **`webResponse`** - Return any HTTP response. AI generates the HTML, JavaScript, JSON or whatever fits.
-- **`updateMemory`** - Persist feedback to markdown. AI reads it on next request.
+Two main tools:
+- **`database`** - Execute SQL queries on MySQL for basic CRUD operations.
+- **`webResponse`** - Return HTML responses for the contact manager interface.
 
-The AI infers what to return from the path alone. Hit `/contacts` and you get an HTML page. Hit `/api/contacts` and you get JSON:
+The AI handles simple HTTP routes for Chinese poetry generation. Hit `/` and you get a new generated Tang/Song poem. Hit `/poems` and you get all stored poems:
 
 ```json
-// What the AI generates for /api/contacts
+// What the AI generates for /poems
 {
-  "contacts": [
-    { "id": 1, "name": "Alice", "email": "alice@example.com" },
-    { "id": 2, "name": "Bob", "email": "bob@example.com" }
+  "poems": [
+    {
+      "id": 1,
+      "title": "春江花月夜",
+      "author": "张若虚",
+      "dynasty": "tang",
+      "content": "春江潮水连海平，海上明月共潮生。"
+    },
+    {
+      "id": 2,
+      "title": "水调歌头",
+      "author": "苏轼",
+      "dynasty": "song",
+      "content": "明月几时有，把酒问青天。"
+    }
   ]
 }
 ```
@@ -181,7 +192,7 @@ nokode/
 │   ├── handler/           # HTTP handlers
 │   │   └── llm_handler.go # LLM request handler
 │   ├── tools/             # LLM tools
-│   │   ├── database.go    # SQLite database tool
+│   │   ├── database.go    # MySQL database tool
 │   │   ├── web_response.go # HTTP response tool
 │   │   └── memory.go      # Memory persistence tool
 │   └── utils/             # Utility functions
@@ -269,6 +280,10 @@ Database:
 - `ANTHROPIC_MODEL` - Anthropic model name (default: claude-3-haiku-20240307)
 - `OPENAI_API_KEY` - Your OpenAI API key
 - `OPENAI_MODEL` - OpenAI model name (default: gpt-4-turbo-preview)
+- `SPARK_APP_ID` - Spark app ID
+- `SPARK_API_KEY` - Spark API key
+- `SPARK_API_SECRET` - Spark API secret
+- `SPARK_MODEL` - Spark model name (default: spark-deep-reasoning)
 
 **Database:**
 - `DB_HOST` - MySQL host (default: localhost)
@@ -276,6 +291,9 @@ Database:
 - `DB_USER` - MySQL user (default: root)
 - `DB_PASSWORD` - MySQL password (default: empty)
 - `DB_NAME` - MySQL database name (default: nokode)
+
+**API Rate Limiting:**
+- `API_RATE_LIMIT_INTERVAL` - Minimum interval between API calls (default: 3s, supports formats like 5s, 10s, 1m)
 
 **Debug:**
 - `DEBUG` - Set to "true" for debug logging

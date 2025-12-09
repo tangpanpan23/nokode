@@ -30,6 +30,19 @@ type Config struct {
 		Model  string `json:",optional"`
 		APIKey string `json:",optional"`
 	}
+	Baidu struct {
+		Model    string `json:",default=spark-x"`
+		APIKey   string `json:",optional"` // 旧版API Key
+		Secret   string `json:",optional"` // 旧版Secret Key
+		APIToken string `json:",optional"` // 千帆平台bce-v3格式token
+		AppID    string `json:",optional"` // 千帆平台appid
+	}
+	Spark struct {
+		Model    string `json:",default=spark-deep-reasoning"`
+		AppID    string `json:",optional"` // 星火应用ID
+		APIKey   string `json:",optional"` // 星火API Key
+		APISecret string `json:",optional"` // 星火API Secret
+	}
 }
 
 func Load(configFile string) (*Config, error) {
@@ -42,7 +55,7 @@ func Load(configFile string) (*Config, error) {
 	
 	// Override with environment variables
 	if c.Provider == "" {
-		c.Provider = getEnv("LLM_PROVIDER", "qwen")
+		c.Provider = getEnv("LLM_PROVIDER", "spark")
 	}
 	if c.RestConf.Port == 0 {
 		portStr := getEnv("PORT", "3001")
@@ -94,6 +107,31 @@ func Load(configFile string) (*Config, error) {
 	c.OpenAI.Model = getEnv("OPENAI_MODEL", "gpt-4-turbo-preview")
 	if c.OpenAI.APIKey == "" {
 		c.OpenAI.APIKey = getEnv("OPENAI_API_KEY", "")
+	}
+
+	c.Baidu.Model = getEnv("BAIDU_MODEL", "ernie-speed-128k")
+	if c.Baidu.APIKey == "" {
+		c.Baidu.APIKey = getEnv("BAIDU_API_KEY", "")
+	}
+	if c.Baidu.Secret == "" {
+		c.Baidu.Secret = getEnv("BAIDU_SECRET_KEY", "")
+	}
+	if c.Baidu.APIToken == "" {
+		c.Baidu.APIToken = getEnv("BAIDU_API_TOKEN", "")
+	}
+	if c.Baidu.AppID == "" {
+		c.Baidu.AppID = getEnv("BAIDU_APP_ID", "")
+	}
+
+	c.Spark.Model = getEnv("SPARK_MODEL", "spark-x")
+	if c.Spark.AppID == "" {
+		c.Spark.AppID = getEnv("SPARK_APP_ID", "")
+	}
+	if c.Spark.APIKey == "" {
+		c.Spark.APIKey = getEnv("SPARK_API_KEY", "")
+	}
+	if c.Spark.APISecret == "" {
+		c.Spark.APISecret = getEnv("SPARK_API_SECRET", "")
 	}
 
 	return &c, nil

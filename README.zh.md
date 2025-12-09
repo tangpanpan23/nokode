@@ -1,6 +1,6 @@
 # nokode
 
-**一个没有应用逻辑的 Web 服务器。只有一个 LLM 和三个工具。**
+**一个简单的 Web 服务器。只有一个 LLM 生成中国古典诗歌。**
 
 [English](README.md) | [中文版](README.zh.md)
 
@@ -22,7 +22,7 @@
 
 ## 目标
 
-联系人管理器。基本的 CRUD：表单、数据库、列表视图、持久化。
+中国诗歌生成器。生成唐代和宋代诗歌，存储到数据库，在网页上展示。
 
 为什么？因为大多数软件只是换了个样子的 CRUD。如果这能工作，那就会是某种成就。
 
@@ -31,22 +31,33 @@
 ```go
 // 整个后端（简化版）
 result := callLLM(cfg, prompt, tools)
-// 工具: database, webResponse, updateMemory
+// 工具: database, webResponse
 ```
 
-三个工具：
-- **`database`** - 在 SQLite 上执行 SQL。AI 设计模式。
-- **`webResponse`** - 返回任何 HTTP 响应。AI 生成 HTML、JavaScript、JSON 或任何合适的内容。
-- **`updateMemory`** - 将反馈持久化到 markdown。AI 在下次请求时读取它。
+两个主要工具：
+- **`database`** - 在 MySQL 上执行 SQL 查询，用于基本的 CRUD 操作。
+- **`webResponse`** - 返回联系人管理界面的 HTML 响应。
 
-AI 仅从路径推断要返回什么。访问 `/contacts` 你会得到一个 HTML 页面。访问 `/api/contacts` 你会得到 JSON：
+AI 处理简单的 HTTP 路由，实现中国诗歌生成。访问 `/` 生成新的唐诗宋词。访问 `/poems` 得到所有诗歌列表：
 
 ```json
-// AI 为 /api/contacts 生成的内容
+// AI 为 /poems 生成的内容
 {
-  "contacts": [
-    { "id": 1, "name": "Alice", "email": "alice@example.com" },
-    { "id": 2, "name": "Bob", "email": "bob@example.com" }
+  "poems": [
+    {
+      "id": 1,
+      "title": "春江花月夜",
+      "author": "张若虚",
+      "dynasty": "tang",
+      "content": "春江潮水连海平，海上明月共潮生。"
+    },
+    {
+      "id": 2,
+      "title": "水调歌头",
+      "author": "苏轼",
+      "dynasty": "song",
+      "content": "明月几时有，把酒问青天。"
+    }
   ]
 }
 ```
@@ -181,7 +192,7 @@ nokode/
 │   ├── handler/           # HTTP 处理器
 │   │   └── llm_handler.go # LLM 请求处理器
 │   ├── tools/             # LLM 工具
-│   │   ├── database.go    # SQLite 数据库工具
+│   │   ├── database.go    # MySQL 数据库工具
 │   │   ├── web_response.go # HTTP 响应工具
 │   │   └── memory.go      # 内存持久化工具
 │   └── utils/             # 工具函数
@@ -268,6 +279,10 @@ Database:
 - `ANTHROPIC_MODEL` - Anthropic 模型名称（默认：claude-3-haiku-20240307）
 - `OPENAI_API_KEY` - 你的 OpenAI API 密钥
 - `OPENAI_MODEL` - OpenAI 模型名称（默认：gpt-4-turbo-preview）
+- `SPARK_APP_ID` - 星火应用ID
+- `SPARK_API_KEY` - 星火API Key
+- `SPARK_API_SECRET` - 星火API Secret
+- `SPARK_MODEL` - 星火模型名称（默认：spark-deep-reasoning）
 
 **数据库:**
 - `DB_HOST` - MySQL 主机（默认：localhost）
@@ -275,6 +290,9 @@ Database:
 - `DB_USER` - MySQL 用户（默认：root）
 - `DB_PASSWORD` - MySQL 密码（默认：空）
 - `DB_NAME` - MySQL 数据库名称（默认：nokode）
+
+**API速率限制:**
+- `API_RATE_LIMIT_INTERVAL` - API调用最小间隔（默认：3s，支持格式如 5s, 10s, 1m）
 
 **调试:**
 - `DEBUG` - 设置为 "true" 以启用调试日志

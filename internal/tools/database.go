@@ -104,28 +104,28 @@ func GetCachedSchema() string {
 }
 
 type DatabaseResult struct {
-	Success        bool                   `json:"success"`
-	Rows           []map[string]interface{} `json:"rows,omitempty"`
-	Count          int                    `json:"count,omitempty"`
-	Changes        int64                  `json:"changes,omitempty"`
-	LastInsertRowID int64                 `json:"lastInsertRowid,omitempty"`
-	Message        string                 `json:"message,omitempty"`
-	Error          string                 `json:"error,omitempty"`
-	Duration       int64                  `json:"duration,omitempty"`
+	Success         bool                     `json:"success"`
+	Rows            []map[string]interface{} `json:"rows,omitempty"`
+	Count           int                      `json:"count,omitempty"`
+	Changes         int64                    `json:"changes,omitempty"`
+	LastInsertRowID int64                    `json:"lastInsertId,omitempty"`
+	Message         string                   `json:"message,omitempty"`
+	Error           string                   `json:"error,omitempty"`
+	Duration        int64                    `json:"duration,omitempty"`
 }
 
 func ExecuteDatabaseQuery(query string, params []interface{}, mode string) DatabaseResult {
 	startTime := time.Now()
-	
+
 	queryPreview := query
 	if len(query) > 100 {
 		queryPreview = query[:100] + "..."
 	}
-	
+
 	utils.Log.Database(fmt.Sprintf("Executing %s query", strings.ToUpper(mode)), map[string]interface{}{
-		"query":      queryPreview,
+		"query":       queryPreview,
 		"paramsCount": len(params),
-		"hasParams":  len(params) > 0,
+		"hasParams":   len(params) > 0,
 	})
 
 	if len(params) > 0 {
@@ -148,7 +148,7 @@ func ExecuteDatabaseQuery(query string, params []interface{}, mode string) Datab
 		utils.Log.Debug("database", "Using exec mode (DDL/multiple statements)", nil)
 		_, err := db.Exec(query)
 		duration := time.Since(startTime).Milliseconds()
-		
+
 		if err != nil {
 			utils.Log.Error("database", fmt.Sprintf("Query failed after %dms", duration), err)
 			result.Error = err.Error()
@@ -217,7 +217,7 @@ func ExecuteDatabaseQuery(query string, params []interface{}, mode string) Datab
 
 		duration := time.Since(startTime).Milliseconds()
 		utils.Log.Success("database", fmt.Sprintf("SELECT returned %d rows in %dms", len(allRows), duration), nil)
-		
+
 		result.Success = true
 		result.Rows = allRows
 		result.Count = len(allRows)
@@ -236,12 +236,12 @@ func ExecuteDatabaseQuery(query string, params []interface{}, mode string) Datab
 
 		changes, _ := res.RowsAffected()
 		lastID, _ := res.LastInsertId()
-		
+
 		queryType := strings.Fields(queryUpper)[0]
 		duration := time.Since(startTime).Milliseconds()
 		utils.Log.Success("database", fmt.Sprintf("%s affected %d rows in %dms", queryType, changes, duration), map[string]interface{}{
-			"changes":        changes,
-			"lastInsertRowid": lastID,
+			"changes":      changes,
+			"lastInsertId": lastID,
 		})
 
 		result.Success = true
@@ -265,4 +265,3 @@ func GetDatabaseContext() string {
 	}
 	return ""
 }
-
